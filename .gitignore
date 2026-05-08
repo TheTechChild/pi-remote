@@ -32,6 +32,3 @@ __pycache__/
 .idea/
 .vscode/
 *.iml
-
-# Stale top-level artifacts
-"Remote Control for Pi Agent Harness"/
