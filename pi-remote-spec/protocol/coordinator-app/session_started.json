@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/session_started.json",
+  "title": "session_started",
+  "description": "Coordinator -> App. Mirror of the daemon's session_started, broadcast to subscribed clients. See SPEC.md § 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "machine_id", "metadata"],
+  "properties": {
+    "type": { "const": "session_started" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "machine_id": { "type": "string" },
+    "metadata": { "type": "object" }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/replay_unavailable.json",
+  "title": "replay_unavailable",
+  "description": "Coordinator -> App. Sent in response to attach when the requested last_seq is older than the ring's earliest entry. See SPEC.md §§ 10.3, 18.4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "earliest_available_seq", "current_seq"],
+  "properties": {
+    "type": { "const": "replay_unavailable" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "earliest_available_seq": { "type": "integer", "minimum": 0 },
+    "current_seq": { "type": "integer", "minimum": 0 }
+  }
+}

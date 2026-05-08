@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/push/push_payload.json",
+  "title": "push_payload",
+  "description": "Plaintext (pre-crypto_box) push payload sent from coordinator to phone via ntfy. See SPEC.md § 10.4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "kind",
+    "machine_id",
+    "machine_display_name",
+    "session_id",
+    "project_name",
+    "reason",
+    "summary",
+    "ts",
+    "deep_link"
+  ],
+  "properties": {
+    "v": { "const": 1 },
+    "kind": {
+      "type": "string",
+      "enum": ["needs_attention"]
+    },
+    "machine_id": { "type": "string" },
+    "machine_display_name": { "type": "string" },
+    "session_id": { "type": "string" },
+    "project_name": { "type": "string" },
+    "project_display_name": { "type": ["string", "null"] },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "agent_idle",
+        "extension_dialog",
+        "tool_failure",
+        "queue_update",
+        "extension_error",
+        "compaction_complete",
+        "machine_suspended",
+        "session_ended",
+        "unresponsive"
+      ]
+    },
+    "summary": { "type": "string" },
+    "ts": { "type": "integer", "minimum": 0 },
+    "deep_link": {
+      "type": "string",
+      "pattern": "^pi-remote://"
+    }
+  }
+}

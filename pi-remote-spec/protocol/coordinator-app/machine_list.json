@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/machine_list.json",
+  "title": "machine_list",
+  "description": "Coordinator -> App. Initial list and subsequent full snapshots of machines and their sessions. See SPEC.md § 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "machines"],
+  "properties": {
+    "type": { "const": "machine_list" },
+    "v": { "const": 1 },
+    "machines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["machine_id", "machine_display_name", "state", "sessions"],
+        "properties": {
+          "machine_id": { "type": "string" },
+          "machine_display_name": { "type": "string" },
+          "state": {
+            "type": "string",
+            "enum": ["online", "suspended", "offline"]
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["session_id", "metadata", "state"],
+              "properties": {
+                "session_id": { "type": "string" },
+                "metadata": { "type": "object" },
+                "state": {
+                  "type": "string",
+                  "enum": ["running", "idle", "paused", "unresponsive", "ended"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

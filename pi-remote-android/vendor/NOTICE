@@ -1,0 +1,18 @@
+The `vendor/terminal-emulator/` and `vendor/terminal-view/` directories
+contain modified portions of:
+
+  Termux App
+  Copyright (C) 2011-2024 Fredrik Fornwall and contributors
+  https://github.com/termux/termux-app
+
+Those two specific modules within termux-app are themselves derived from:
+
+  Terminal Emulator for Android
+  Copyright (C) 2011 Steven Luo
+  https://github.com/jackpal/Android-Terminal-Emulator
+
+Both are licensed under the Apache License, Version 2.0. See
+LICENSE-APACHE-2.0.txt in this directory for the full license text.
+
+The remainder of `pi-remote-android` (everything outside `vendor/`) is
+licensed under the MIT License — see the repository-root LICENSE file.

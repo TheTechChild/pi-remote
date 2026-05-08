@@ -1,0 +1,19 @@
+# Gradle / Android build outputs
+.gradle/
+.kotlin/
+build/
+local.properties
+*.apk
+*.aab
+
+# Codegen workspace
+.codegen-cache/
+
+# Editor / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# JNI native build outputs
+.cxx/

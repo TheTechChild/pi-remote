@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/subscribe_machine_list.json",
+  "title": "subscribe_machine_list",
+  "description": "App -> Coordinator. Subscribe to machine and session updates. See SPEC.md § 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v"],
+  "properties": {
+    "type": { "const": "subscribe_machine_list" },
+    "v": { "const": 1 }
+  }
+}

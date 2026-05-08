@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/session_ended.json",
+  "title": "session_ended",
+  "description": "Coordinator -> App. Forwarded session_ended that includes machine_id. See SPEC.md § 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "machine_id", "reason"],
+  "properties": {
+    "type": { "const": "session_ended" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "machine_id": { "type": "string" },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "process_exit",
+        "extension_disconnect",
+        "tmux_server_lost",
+        "killed",
+        "spawn_failed"
+      ]
+    }
+  }
+}

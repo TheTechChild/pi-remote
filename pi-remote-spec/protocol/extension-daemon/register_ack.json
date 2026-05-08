@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/extension-daemon/register_ack.json",
+  "title": "register_ack",
+  "description": "Daemon -> Extension. Reply to a `register`. See SPEC.md § 10.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "accepted"],
+  "properties": {
+    "type": { "const": "register_ack" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "accepted": { "type": "boolean" },
+    "reason": {
+      "type": "string",
+      "description": "Present and informative when `accepted` is false."
+    }
+  },
+  "if": {
+    "properties": { "accepted": { "const": false } },
+    "required": ["accepted"]
+  },
+  "then": { "required": ["reason"] }
+}

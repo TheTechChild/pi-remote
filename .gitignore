@@ -1,0 +1,37 @@
+# Top-level Node / yarn
+node_modules/
+yarn-error.log
+.yarn/cache/
+.yarn/install-state.gz
+
+# Codegen workspace (left over from polyrepo bootstrap; harmless if absent)
+.codegen-cache/
+.codegen-bin/
+
+# Component build outputs
+pi-remote-ext/dist/
+pi-remote-daemon/pi-remote-daemon
+pi-remote-daemon/dist/
+pi-remote-coordinator/pi-remote-coordinator
+pi-remote-coordinator/dist/
+pi-remote-android/.gradle/
+pi-remote-android/build/
+pi-remote-android/app/build/
+pi-remote-android/vendor/*/build/
+pi-remote-android/local.properties
+pi-remote-android/.cxx/
+pi-remote-android/*.apk
+pi-remote-android/*.aab
+
+# Python virtualenvs (used to run the spec validators locally)
+.venv/
+__pycache__/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Stale top-level artifacts
+"Remote Control for Pi Agent Harness"/

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/session_pty.json",
+  "title": "session_pty",
+  "description": "Daemon -> Coordinator (also Coordinator -> App). Pty bytes from a session. See SPEC.md §§ 10.2, 10.3, 24 (compression reserved).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "seq", "ts", "bytes"],
+  "properties": {
+    "type": { "const": "session_pty" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "ts": { "type": "integer", "minimum": 0 },
+    "bytes": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Base64-encoded raw pty bytes."
+    },
+    "compression": {
+      "description": "Reserved for v2 (zstd). v1 omits or sets to null.",
+      "type": ["string", "null"],
+      "enum": [null, "none", "zstd"]
+    }
+  }
+}

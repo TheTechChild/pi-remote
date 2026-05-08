@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT
+# docker compose setup for unraid (SPEC.md § D15).
+# Run from repository root:
+#   docker compose -f deploy/docker-compose.yaml up --build
+
+services:
+  coordinator:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: pi-remote-coordinator:dev
+    container_name: pi-remote-coordinator
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - coordinator-data:/data
+    environment:
+      - PI_REMOTE_DEBUG=
+    depends_on:
+      - ntfy
+    # Phase-0 has no in-container http client; verify health from the host with
+    #   curl http://localhost:8080/v1/health
+    # The full healthcheck wires up alongside milestone M-deploy.
+
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: pi-remote-ntfy
+    restart: unless-stopped
+    command: serve
+    ports:
+      - "8081:80"
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+      - ntfy-config:/etc/ntfy
+    environment:
+      - NTFY_BASE_URL=http://localhost:8081
+      - NTFY_CACHE_FILE=/var/cache/ntfy/cache.db
+
+volumes:
+  coordinator-data:
+  ntfy-cache:
+  ntfy-config:

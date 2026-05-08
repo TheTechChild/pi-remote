@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "kind": "needs_attention",
+  "machine_id": "macbook-pro",
+  "machine_display_name": "MacBook Pro",
+  "session_id": "01934e2a-7c10-71b4-a1f0-9f0123abcdef",
+  "project_name": "content-collections",
+  "project_display_name": "Content Collections",
+  "reason": "extension_dialog",
+  "summary": "Permission required: rm -rf node_modules",
+  "ts": 1730000000123,
+  "deep_link": "pi-remote://session/01934e2a-7c10-71b4-a1f0-9f0123abcdef"
+}

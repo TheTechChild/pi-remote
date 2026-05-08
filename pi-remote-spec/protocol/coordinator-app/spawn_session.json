@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/spawn_session.json",
+  "title": "spawn_session",
+  "description": "App -> Coordinator. Asks coordinator to relay a spawn request to the named machine. See SPEC.md §§ 10.3, 15.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "request_id", "machine_id", "cwd"],
+  "properties": {
+    "type": { "const": "spawn_session" },
+    "v": { "const": 1 },
+    "request_id": { "type": "string" },
+    "machine_id": { "type": "string" },
+    "cwd": { "type": "string" },
+    "project_override": { "type": ["string", "null"] }
+  }
+}

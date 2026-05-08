@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# systemd --user unit for pi-remote-daemon (SPEC.md § D11).
+# Install at ~/.config/systemd/user/pi-remote-daemon.service and enable with:
+#     systemctl --user enable --now pi-remote-daemon.service
+
+[Unit]
+Description=pi-remote-daemon: bridges Pi sessions to the pi-remote coordinator
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pi-remote-daemon --config %h/.config/pi-remote/daemon.toml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

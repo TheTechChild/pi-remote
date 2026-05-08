@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/spawn_request.json",
+  "title": "spawn_request",
+  "description": "Coordinator -> Daemon. Asks the daemon to spawn a new Pi session in tmux. See SPEC.md §§ 10.2, 14.3, 15.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "request_id", "cwd"],
+  "properties": {
+    "type": { "const": "spawn_request" },
+    "v": { "const": 1 },
+    "request_id": { "type": "string" },
+    "cwd": { "type": "string" },
+    "project_override": { "type": ["string", "null"] }
+  }
+}

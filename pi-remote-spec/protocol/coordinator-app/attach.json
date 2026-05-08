@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/attach.json",
+  "title": "attach",
+  "description": "App -> Coordinator. Attach to a session and request replay starting after `last_seq`. See SPEC.md §§ 10.3, 18.4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id"],
+  "properties": {
+    "type": { "const": "attach" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "last_seq": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "0 means stream all available history then go live."
+    }
+  }
+}

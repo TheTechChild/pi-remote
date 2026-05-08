@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/extension-daemon/ping.json",
+  "title": "ping",
+  "description": "Daemon -> Extension. Optional liveness ping. See SPEC.md § 10.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "ts"],
+  "properties": {
+    "type": { "const": "ping" },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix epoch milliseconds."
+    }
+  }
+}

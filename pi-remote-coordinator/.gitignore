@@ -1,0 +1,14 @@
+# Compiled binaries
+/pi-remote-coordinator
+/dist/
+*.exe
+*.test
+*.out
+
+# Codegen workspace
+.codegen-cache/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

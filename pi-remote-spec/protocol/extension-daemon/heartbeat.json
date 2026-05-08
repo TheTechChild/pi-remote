@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/extension-daemon/heartbeat.json",
+  "title": "heartbeat",
+  "description": "Extension -> Daemon. 10-second cadence liveness ping. See SPEC.md §§ 6.6, 10.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "ts"],
+  "properties": {
+    "type": { "const": "heartbeat" },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix epoch milliseconds."
+    }
+  }
+}

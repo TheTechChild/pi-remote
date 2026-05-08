@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/extension-daemon/disconnect.json",
+  "title": "disconnect",
+  "description": "Extension -> Daemon. Sent on `session_shutdown`. See SPEC.md §§ 6.6, 10.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "reason"],
+  "properties": {
+    "type": { "const": "disconnect" },
+    "reason": {
+      "type": "string",
+      "enum": ["session_shutdown", "client_request", "error"]
+    }
+  }
+}

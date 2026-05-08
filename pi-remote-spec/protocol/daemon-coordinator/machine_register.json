@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/machine_register.json",
+  "title": "machine_register",
+  "description": "Daemon -> Coordinator. First message after WebSocket open. See SPEC.md § 10.2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "machine_id", "machine_display_name", "daemon_version", "capabilities"],
+  "properties": {
+    "type": { "const": "machine_register" },
+    "v": { "const": 1 },
+    "machine_id": { "type": "string" },
+    "machine_display_name": { "type": "string" },
+    "daemon_version": { "type": "string" },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["spawn", "mirror"]
+      },
+      "uniqueItems": true
+    }
+  }
+}

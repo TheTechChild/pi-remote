@@ -1,0 +1,8 @@
+{"type":"register","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","spawn_token":null,"cwd":"/Users/clayton/projects/foo","project_name":"foo","project_display_name":null,"tmux_target":"pi-remote-control:0.0","pid":12345,"hostname":"macbook-pro.local","model":"anthropic/claude-sonnet-4-20250514","started_at":1730000000000}
+{"type":"register_ack","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","accepted":true}
+{"type":"heartbeat","ts":1730000010000}
+{"type":"heartbeat","ts":1730000020000}
+{"type":"heartbeat","ts":1730000030000}
+{"type":"event","v":1,"kind":"agent_start","ts":1730000031000,"data":{"prompt_excerpt":"refactor the queue worker"}}
+{"type":"event","v":1,"kind":"agent_end","ts":1730000091000,"data":{"messages_summary":{"count":3,"last_text":"Done. The tests pass.","tools_used":["read","edit","bash"]}}}
+{"type":"disconnect","reason":"session_shutdown"}

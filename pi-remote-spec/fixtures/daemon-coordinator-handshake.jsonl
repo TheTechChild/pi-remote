@@ -1,0 +1,8 @@
+{"type":"machine_register","v":1,"machine_id":"macbook-pro","machine_display_name":"MacBook Pro","daemon_version":"1.0.0","capabilities":["spawn","mirror"]}
+{"type":"session_started","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","machine_id":"macbook-pro","metadata":{"cwd":"/Users/clayton/projects/foo","project_name":"foo","project_display_name":null,"hostname":"macbook-pro.local","model":"anthropic/claude-sonnet-4-20250514","started_at":1730000000000,"spawn_token":null}}
+{"type":"session_event","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":1,"kind":"agent_start","ts":1730000031000,"data":{}}
+{"type":"session_pty","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":2,"ts":1730000031050,"bytes":"G1tIG1tKUGk+IA=="}
+{"type":"session_pty","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":3,"ts":1730000031200,"bytes":"V29ya2luZyBvbiBxdWV1ZSB3b3JrZXIuLi4K"}
+{"type":"session_event","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":4,"kind":"agent_end","ts":1730000091000,"data":{"messages_summary":{"count":3,"last_text":"Done. The tests pass.","tools_used":["read","edit","bash"]}}}
+{"type":"session_state_change","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":5,"ts":1730000091001,"from":"running","to":"idle"}
+{"type":"machine_suspending","v":1,"ts":1730000180000}

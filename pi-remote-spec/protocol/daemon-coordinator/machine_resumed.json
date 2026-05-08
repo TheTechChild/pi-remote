@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/machine_resumed.json",
+  "title": "machine_resumed",
+  "description": "Daemon -> Coordinator. Sent on the first reconnect after wake-from-suspend. See SPEC.md §§ 7.7, 17.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "ts"],
+  "properties": {
+    "type": { "const": "machine_resumed" },
+    "v": { "const": 1 },
+    "ts": { "type": "integer", "minimum": 0 }
+  }
+}

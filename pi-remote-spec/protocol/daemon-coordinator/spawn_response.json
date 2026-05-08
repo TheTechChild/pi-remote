@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/spawn_response.json",
+  "title": "spawn_response",
+  "description": "Daemon -> Coordinator (and relayed Coordinator -> App). Reply to a spawn_request. See SPEC.md §§ 10.2, 10.3, 15.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "request_id", "success"],
+  "properties": {
+    "type": { "const": "spawn_response" },
+    "v": { "const": 1 },
+    "request_id": { "type": "string" },
+    "success": { "type": "boolean" },
+    "session_id": { "type": "string" },
+    "tmux_target": { "type": "string" },
+    "error": { "type": "string" },
+    "client_id": {
+      "type": "string",
+      "description": "Set by the coordinator when relaying so only the originating client receives the message."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "success": { "const": true } }, "required": ["success"] },
+      "then": { "required": ["session_id", "tmux_target"] }
+    },
+    {
+      "if": { "properties": { "success": { "const": false } }, "required": ["success"] },
+      "then": { "required": ["error"] }
+    }
+  ]
+}

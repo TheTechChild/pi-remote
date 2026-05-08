@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/session_state_change.json",
+  "title": "session_state_change",
+  "description": "Daemon -> Coordinator (also forwarded to App). Session state transition. See SPEC.md §§ 10.2, 10.3, 12.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "seq", "ts", "from", "to"],
+  "properties": {
+    "type": { "const": "session_state_change" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "ts": { "type": "integer", "minimum": 0 },
+    "from": { "$ref": "#/$defs/state" },
+    "to": { "$ref": "#/$defs/state" }
+  },
+  "$defs": {
+    "state": {
+      "type": "string",
+      "enum": ["running", "idle", "paused", "unresponsive", "ended"]
+    }
+  }
+}

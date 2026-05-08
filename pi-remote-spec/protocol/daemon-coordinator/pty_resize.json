@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/pty_resize.json",
+  "title": "pty_resize",
+  "description": "Coordinator -> Daemon (originating from a client). Structured pane resize. See SPEC.md § 14.5.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "rows", "cols"],
+  "properties": {
+    "type": { "const": "pty_resize" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "rows": { "type": "integer", "minimum": 1 },
+    "cols": { "type": "integer", "minimum": 1 }
+  }
+}

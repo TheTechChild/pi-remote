@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/machine_suspending.json",
+  "title": "machine_suspending",
+  "description": "Daemon -> Coordinator. Sent immediately before the OS suspends the machine. See SPEC.md §§ 10.2, 17.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "ts"],
+  "properties": {
+    "type": { "const": "machine_suspending" },
+    "v": { "const": 1 },
+    "ts": { "type": "integer", "minimum": 0 }
+  }
+}

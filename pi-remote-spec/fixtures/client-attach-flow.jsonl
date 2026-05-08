@@ -1,0 +1,8 @@
+{"type":"client_hello","v":1,"client_id":"01934e2b-1c20-71d4-bb01-aaaa00000001","app_version":"1.0.0"}
+{"type":"subscribe_machine_list","v":1}
+{"type":"machine_list","v":1,"machines":[{"machine_id":"macbook-pro","machine_display_name":"MacBook Pro","state":"online","sessions":[{"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","metadata":{"cwd":"/Users/clayton/projects/foo","project_name":"foo","hostname":"macbook-pro.local","model":"anthropic/claude-sonnet-4-20250514","started_at":1730000000000},"state":"running"}]}]}
+{"type":"attach","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","last_seq":0}
+{"type":"session_pty","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":2,"ts":1730000031050,"bytes":"G1tIG1tKUGk+IA=="}
+{"type":"session_pty","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":3,"ts":1730000031200,"bytes":"V29ya2luZyBvbiBxdWV1ZSB3b3JrZXIuLi4K"}
+{"type":"pty_input","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","bytes":"eWVz"}
+{"type":"session_pty","v":1,"session_id":"01934e2a-7c10-71b4-a1f0-9f0123abcdef","seq":4,"ts":1730000035000,"bytes":"eWVzCg=="}

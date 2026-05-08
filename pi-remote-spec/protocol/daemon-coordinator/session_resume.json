@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/session_resume.json",
+  "title": "session_resume",
+  "description": "Daemon -> Coordinator. Sent on reconnect for each still-live Pi session. Carries the daemon's last emitted seq so the broker can compute backfill availability. See SPEC.md §§ 7.8, 10.2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "metadata", "last_seq_emitted"],
+  "properties": {
+    "type": { "const": "session_resume" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "last_seq_emitted": { "type": "integer", "minimum": 0 }
+  }
+}

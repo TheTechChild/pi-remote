@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/session_started.json",
+  "title": "session_started",
+  "description": "Daemon -> Coordinator. Emitted when a Pi session registers with the daemon. The same shape is forwarded by the coordinator to clients. See SPEC.md §§ 10.2, 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "machine_id", "metadata"],
+  "properties": {
+    "type": { "const": "session_started" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "machine_id": { "type": "string" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cwd", "project_name", "hostname", "model", "started_at"],
+      "properties": {
+        "cwd": { "type": "string" },
+        "project_name": { "type": "string" },
+        "project_display_name": { "type": ["string", "null"] },
+        "hostname": { "type": "string" },
+        "model": { "type": "string" },
+        "started_at": { "type": "integer", "minimum": 0 },
+        "spawn_token": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

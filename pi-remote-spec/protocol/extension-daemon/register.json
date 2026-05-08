@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/extension-daemon/register.json",
+  "title": "register",
+  "description": "Extension -> Daemon. First message after the extension connects to the Unix socket. See SPEC.md § 10.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "v",
+    "session_id",
+    "cwd",
+    "project_name",
+    "tmux_target",
+    "pid",
+    "hostname",
+    "model",
+    "started_at"
+  ],
+  "properties": {
+    "type": { "const": "register" },
+    "v": { "const": 1 },
+    "session_id": {
+      "type": "string",
+      "description": "Pi session UUID (UUIDv7)."
+    },
+    "spawn_token": {
+      "type": ["string", "null"],
+      "description": "Hex-encoded 32-character spawn token (D6) when the daemon spawned this Pi process; null/absent when user-spawned."
+    },
+    "cwd": { "type": "string" },
+    "project_name": { "type": "string" },
+    "project_display_name": { "type": ["string", "null"] },
+    "tmux_target": {
+      "type": "string",
+      "description": "tmux pane target string in `session:window.pane` form."
+    },
+    "pid": { "type": "integer", "minimum": 1 },
+    "hostname": { "type": "string" },
+    "model": { "type": "string" },
+    "started_at": {
+      "type": "integer",
+      "description": "Unix epoch milliseconds at which the Pi process started.",
+      "minimum": 0
+    }
+  }
+}

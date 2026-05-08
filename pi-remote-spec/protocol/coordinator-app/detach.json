@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/detach.json",
+  "title": "detach",
+  "description": "App -> Coordinator. Explicit detach (close is also accepted). See SPEC.md §§ 10.3, 16.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id"],
+  "properties": {
+    "type": { "const": "detach" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" }
+  }
+}

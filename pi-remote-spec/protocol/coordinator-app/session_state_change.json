@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/session_state_change.json",
+  "title": "session_state_change",
+  "description": "Coordinator -> App. Forwarded session state transition with machine_id added. See SPEC.md § 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "machine_id", "from", "to"],
+  "properties": {
+    "type": { "const": "session_state_change" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "machine_id": { "type": "string" },
+    "from": { "$ref": "#/$defs/state" },
+    "to": { "$ref": "#/$defs/state" }
+  },
+  "$defs": {
+    "state": {
+      "type": "string",
+      "enum": ["running", "idle", "paused", "unresponsive", "ended"]
+    }
+  }
+}

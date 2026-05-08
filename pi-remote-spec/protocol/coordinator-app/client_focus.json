@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/client_focus.json",
+  "title": "client_focus",
+  "description": "App -> Coordinator. Reports whether the session is currently in the foreground for this client (used to suppress push). See SPEC.md §§ 9.7, 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "focused"],
+  "properties": {
+    "type": { "const": "client_focus" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "focused": { "type": "boolean" }
+  }
+}

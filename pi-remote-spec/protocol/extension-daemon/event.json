@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/extension-daemon/event.json",
+  "title": "event",
+  "description": "Extension -> Daemon. Projection of a Pi event onto Pi Remote's protocol. See SPEC.md §§ 6.4, 10.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "kind", "ts", "data"],
+  "properties": {
+    "type": { "const": "event" },
+    "v": { "const": 1 },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "agent_start",
+        "agent_end",
+        "attention_dialog",
+        "tool_failure",
+        "queue_update",
+        "model_select",
+        "compaction_start",
+        "compaction_end",
+        "extension_error"
+      ]
+    },
+    "ts": {
+      "type": "integer",
+      "description": "Unix epoch milliseconds.",
+      "minimum": 0
+    },
+    "data": {
+      "type": "object",
+      "description": "Kind-specific payload. Free-form for v1; per-kind shapes are documented in SPEC.md § 6.4."
+    }
+  }
+}

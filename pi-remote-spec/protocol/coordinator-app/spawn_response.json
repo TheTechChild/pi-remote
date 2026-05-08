@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/spawn_response.json",
+  "title": "spawn_response",
+  "description": "Coordinator -> App. Relayed spawn_response delivered only to the originating client. See SPEC.md §§ 10.3, 15.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "request_id", "success"],
+  "properties": {
+    "type": { "const": "spawn_response" },
+    "v": { "const": 1 },
+    "request_id": { "type": "string" },
+    "success": { "type": "boolean" },
+    "session_id": { "type": "string" },
+    "error": { "type": "string" }
+  }
+}

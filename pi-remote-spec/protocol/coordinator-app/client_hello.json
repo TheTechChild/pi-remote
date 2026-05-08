@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/coordinator-app/client_hello.json",
+  "title": "client_hello",
+  "description": "App -> Coordinator. First message after WebSocket open. See SPEC.md § 10.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "client_id", "app_version"],
+  "properties": {
+    "type": { "const": "client_hello" },
+    "v": { "const": 1 },
+    "client_id": { "type": "string" },
+    "app_version": { "type": "string" }
+  }
+}

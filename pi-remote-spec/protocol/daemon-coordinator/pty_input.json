@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TheTechChild/pi-remote-spec/protocol/daemon-coordinator/pty_input.json",
+  "title": "pty_input",
+  "description": "Coordinator -> Daemon. Forwarded keystrokes from a client. See SPEC.md §§ 10.2, 14.4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "v", "session_id", "client_id", "bytes"],
+  "properties": {
+    "type": { "const": "pty_input" },
+    "v": { "const": 1 },
+    "session_id": { "type": "string" },
+    "client_id": { "type": "string" },
+    "bytes": {
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  }
+}
