@@ -1,0 +1,39 @@
+{
+  "name": "pi-remote-ext",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi extension that bridges each running Pi session into the local pi-remote-daemon over a Unix socket. Workspace member of the pi-remote monorepo.",
+  "license": "MIT",
+  "author": "Clayton",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheTechChild/pi-remote.git",
+    "directory": "pi-remote-ext"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "codegen": "bash scripts/codegen.sh"
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "0.73.1",
+    "@sinclair/typebox": "0.34.49",
+    "ajv": "8.20.0",
+    "smol-toml": "1.6.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@types/node": "22.19.17",
+    "json-schema-to-typescript": "15.0.4",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
