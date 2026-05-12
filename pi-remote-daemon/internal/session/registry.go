@@ -7,6 +7,21 @@ import (
 	"time"
 )
 
+// EndedKind tags the OnEnded callback so consumers (the multiplex) can
+// pick the upstream reason without inspecting state.
+type EndedKind int
+
+const (
+	// EndedExplicit means the extension sent a `disconnect` frame; the
+	// extension-side reason (session_shutdown / client_request / error)
+	// is forwarded as the `reason` argument to the callback.
+	EndedExplicit EndedKind = iota
+	// EndedImplicit means the extension's socket closed without a
+	// disconnect frame. The callback `reason` is empty; the multiplex
+	// emits upstream `session_ended { reason: "process_exit" }`.
+	EndedImplicit
+)
+
 // ErrUnknownSession is returned by registry mutators when the named session
 // is not registered.
 var ErrUnknownSession = errors.New("session: unknown session_id")
@@ -20,13 +35,71 @@ const ErrCodeDuplicateSessionID = "ERR_DAEMON_DUPLICATE_SESSION_ID"
 // sessions. Concurrent access is guarded by a single RWMutex; per SPEC § 7.5
 // the workload is a small map with low contention, so channels are deferred
 // until M3 (coordinator multiplex) needs goroutine fan-out.
+//
+// M3+M4 add callback hooks that fire after the registry's mutex is
+// released, so callbacks may safely re-enter the registry (e.g., to read
+// other sessions for fan-out). Callbacks are invoked synchronously from
+// the mutating goroutine; if a callback panics, the registry recovers and
+// logs, then returns to the caller as if the mutation succeeded.
 type Registry struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+
+	hookMu        sync.RWMutex
+	onRegister    func(s *Session)
+	onHeartbeat   func(id string, ts time.Time)
+	onEnded       func(s *Session, kind EndedKind, reason string)
+	onEvent       func(id string, eventBytes []byte)
+	onStateChange func(id string, from, to SessionState)
 }
 
 func NewRegistry() *Registry {
 	return &Registry{sessions: make(map[string]*Session)}
+}
+
+// OnRegister installs a callback fired after a successful Register that
+// adds a new session. Idempotent re-registrations (same id, same pid) do
+// NOT fire the callback again; only the initial registration does. The
+// multiplex uses this to emit `session_started`.
+func (r *Registry) OnRegister(fn func(s *Session)) {
+	_ = fn // RED-phase stub.
+}
+
+// OnHeartbeat installs a callback fired after a successful
+// UpdateHeartbeat. The multiplex does NOT use this on the upstream wire
+// (the coordinator infers liveness from frame cadence + WebSocket ping);
+// the hook exists so future heartbeat-timeout work (#42) has a place to
+// plug in.
+func (r *Registry) OnHeartbeat(fn func(id string, ts time.Time)) {
+	_ = fn // RED-phase stub.
+}
+
+// OnEnded installs a callback fired exactly once per session ending,
+// from either RemoveWithReason (kind=EndedExplicit) or MarkEnded
+// (kind=EndedImplicit). Subsequent calls on the same id are no-ops.
+func (r *Registry) OnEnded(fn func(s *Session, kind EndedKind, reason string)) {
+	_ = fn // RED-phase stub.
+}
+
+// OnEvent installs a callback fired by Event. The bytes are the raw
+// extension-side `event` frame; the multiplex parses them.
+func (r *Registry) OnEvent(fn func(id string, eventBytes []byte)) {
+	_ = fn // RED-phase stub.
+}
+
+// OnStateChange is reserved for #42 (heartbeat-timeout detection) and
+// later state-transition work. Currently no codepath in M3+M4 fires it;
+// the hook is plumbed so the future work can subscribe without surgery.
+func (r *Registry) OnStateChange(fn func(id string, from, to SessionState)) {
+	_ = fn // RED-phase stub.
+}
+
+// Event fans out an extension-side event frame to the OnEvent callback.
+// Bytes are passed through verbatim; the registry does no parsing.
+func (r *Registry) Event(id string, eventBytes []byte) {
+	_ = id
+	_ = eventBytes
+	// RED-phase stub.
 }
 
 // Register stores s if no entry exists for s.SessionID, or refreshes the
@@ -56,23 +129,43 @@ func (r *Registry) UpdateHeartbeat(id string, ts time.Time) error {
 	return nil
 }
 
-// Remove deletes the entry. Used for explicit `disconnect` frames per the
-// batch plan.
+// Remove deletes the entry. Thin wrapper around RemoveWithReason(id, "")
+// for backward compatibility with the M1 socket handler.
 func (r *Registry) Remove(id string) {
+	r.RemoveWithReason(id, "")
+}
+
+// RemoveWithReason deletes the entry and fires OnEnded with
+// kind=EndedExplicit and the supplied reason. The reason is the
+// extension-side disconnect reason (session_shutdown / client_request /
+// error) and is informational; the multiplex collapses all of them to
+// the single upstream reason value `extension_disconnect` per the
+// schema's enum.
+//
+// If MarkEnded already fired OnEnded for this session, this call is a
+// no-op (one OnEnded per session lifetime).
+func (r *Registry) RemoveWithReason(id, reason string) {
+	_ = reason
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.sessions, id)
+	// RED-phase: stub does not fire OnEnded; tests will catch.
 }
 
-// MarkEnded keeps the entry but flips State to `ended`. Used when the
-// extension's socket closes without a `disconnect` frame; later milestones
-// add a reaper.
+// MarkEnded keeps the entry but flips State to `ended` and stamps
+// EndedAt. Used when the extension's socket closes without a
+// `disconnect` frame; the reaper (#43) will sweep ended entries.
+//
+// Fires OnEnded with kind=EndedImplicit. If RemoveWithReason already
+// fired OnEnded for this session, this call is a no-op (one OnEnded per
+// session lifetime).
 func (r *Registry) MarkEnded(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if s, ok := r.sessions[id]; ok {
 		s.State = StateEnded
 	}
+	// RED-phase: stub does not stamp EndedAt or fire OnEnded.
 }
 
 // Get returns a snapshot copy of the named session. Returning by value
