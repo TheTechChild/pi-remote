@@ -12,6 +12,15 @@ orchestrator. Run scripts from the repo root (`yarn build`, `yarn test`,
 See [`docs/package-management.md`](docs/package-management.md) for the full
 rationale, the layered-override strategy, and the upgrade procedure.
 
+## Go dependencies
+
+The daemon (`pi-remote-daemon/`) and coordinator (`pi-remote-coordinator/`)
+are independent Go modules. Direct dependencies are governed by SPEC §§ 22.2
+/ 22.3 (the approved-deps tables) and pinned exact-patch in `go.mod`.
+
+See [`docs/go-dependencies.md`](docs/go-dependencies.md) for the full rules,
+the add-a-dep / upgrade-a-dep procedures, and the toolchain pinning policy.
+
 ## Go local development
 
 The two Go workspaces (`pi-remote-coordinator/` and `pi-remote-daemon/`)

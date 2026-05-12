@@ -61,6 +61,44 @@ The pinned spec commit is recorded in
 [`scripts/spec-version.txt`](scripts/spec-version.txt). Bumping the pin is a
 deliberate PR (see SPEC.md § D21).
 
+## Known deviations
+
+These are intentional, scoped trade-offs taken during phase-1 development.
+Each has either a tracking issue or is documented for follow-up.
+
+### LastSeq is not persisted across daemon restarts (SPEC § D18)
+
+SPEC § D18 specifies that if the daemon truly loses its per-session `seq`
+counter (unclean kill), it should resume at `last_known + 1000` to avoid
+collision with cached coordinator entries. The daemon's M3+M4
+implementation keeps `LastSeq` in memory only and starts at 1 on every
+process boot. This is acceptable in phase-1 because the coordinator's
+broker (and its session-keyed cache) lands in a later batch; until then
+there is nothing on the coordinator side that would observe a collision.
+
+Disk-buffered persistence of `LastSeq` is filed as future hardening. The
+broker batch will revisit.
+
+### v1 has no daemon-minted UUIDs (SPEC §§ D17, 22.2)
+
+SPEC § D17 mandates UUIDv7 for all minted IDs. An audit performed during
+Batch 2 (see #46) confirmed that **the daemon mints no UUID-shaped IDs in
+v1's design**:
+
+- `session_id` is ext-minted; the daemon receives it via `register` and
+  passes it through opaquely. The ext-side v4 → v7 migration is tracked
+  in #46.
+- `request_id` is app-minted (SPEC § 15 step 2); the daemon echoes it
+  verbatim on `spawn_response`.
+- `machine_id` is set in `daemon.toml`, not runtime-minted.
+- `spawn_token` is `crypto/rand` 16-byte hex per SPEC § D6 — a distinct
+  ID class, not a UUID.
+
+`github.com/google/uuid` v1.6.x remains on SPEC § 22.2's approved-deps
+list against future need but is not currently imported by the daemon.
+When a future change introduces a daemon-minted UUID, the dep is added
+then, governed by [`docs/go-dependencies.md`](../docs/go-dependencies.md).
+
 ## Deploy
 
 - macOS: see [`deploy/install-macos.sh`](deploy/install-macos.sh) and
