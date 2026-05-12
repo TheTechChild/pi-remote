@@ -145,7 +145,7 @@ func TestRegistry_Concurrent_RaceSafe(t *testing.T) {
 		}(id)
 		go func(id string) {
 			defer wg.Done()
-			r.UpdateHeartbeat(id, time.Now())
+			_ = r.UpdateHeartbeat(id, time.Now())
 		}(id)
 	}
 	wg.Wait()

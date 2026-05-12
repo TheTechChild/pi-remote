@@ -105,7 +105,7 @@ func TestServe_DuplicateSessionDifferentPID_RejectedWithErrCode(t *testing.T) {
 	})
 
 	client, _ := servePipe(t, reg)
-	client.Write([]byte(validRegister("sess-dup", 2) + "\n"))
+	_, _ = client.Write([]byte(validRegister("sess-dup", 2) + "\n"))
 
 	line := readLine(t, client)
 	var ack map[string]any
@@ -123,7 +123,7 @@ func TestServe_DuplicateSessionDifferentPID_RejectedWithErrCode(t *testing.T) {
 func TestServe_HeartbeatUpdatesLastHeartbeat(t *testing.T) {
 	reg := session.NewRegistry()
 	client, _ := servePipe(t, reg)
-	client.Write([]byte(validRegister("sess-hb", 1) + "\n"))
+	_, _ = client.Write([]byte(validRegister("sess-hb", 1) + "\n"))
 	_ = readLine(t, client) // discard ack
 
 	hb := `{"type":"heartbeat","ts":1730000099000}` + "\n"
@@ -146,10 +146,10 @@ func TestServe_HeartbeatUpdatesLastHeartbeat(t *testing.T) {
 func TestServe_DisconnectRemovesSession(t *testing.T) {
 	reg := session.NewRegistry()
 	client, done := servePipe(t, reg)
-	client.Write([]byte(validRegister("sess-disc", 1) + "\n"))
+	_, _ = client.Write([]byte(validRegister("sess-disc", 1) + "\n"))
 	_ = readLine(t, client)
 
-	client.Write([]byte(`{"type":"disconnect","reason":"session_shutdown"}` + "\n"))
+	_, _ = client.Write([]byte(`{"type":"disconnect","reason":"session_shutdown"}` + "\n"))
 
 	select {
 	case <-done:
@@ -164,10 +164,10 @@ func TestServe_DisconnectRemovesSession(t *testing.T) {
 func TestServe_ConnCloseWithoutDisconnect_MarksEnded(t *testing.T) {
 	reg := session.NewRegistry()
 	client, done := servePipe(t, reg)
-	client.Write([]byte(validRegister("sess-drop", 1) + "\n"))
+	_, _ = client.Write([]byte(validRegister("sess-drop", 1) + "\n"))
 	_ = readLine(t, client)
 
-	client.Close()
+	_ = client.Close()
 
 	select {
 	case <-done:
@@ -187,7 +187,7 @@ func TestServe_MalformedJSONOnFirstFrame_ClosesConnRegistryUntouched(t *testing.
 	reg := session.NewRegistry()
 	client, done := servePipe(t, reg)
 
-	client.Write([]byte("{not json\n"))
+	_, _ = client.Write([]byte("{not json\n"))
 
 	select {
 	case <-done:
@@ -206,8 +206,8 @@ func TestServe_OversizeFrame_ClosesConn(t *testing.T) {
 
 	// 2MB blob — exceeds the 1MB scanner cap; scanner returns ErrTooLong.
 	huge := strings.Repeat("a", 2*1024*1024)
-	client.Write([]byte(huge))
-	client.Close()
+	_, _ = client.Write([]byte(huge))
+	_ = client.Close()
 
 	select {
 	case <-done:
@@ -223,7 +223,7 @@ func TestServe_NonRegisterFirstFrame_Rejected(t *testing.T) {
 	reg := session.NewRegistry()
 	client, done := servePipe(t, reg)
 
-	client.Write([]byte(`{"type":"heartbeat","ts":1}` + "\n"))
+	_, _ = client.Write([]byte(`{"type":"heartbeat","ts":1}` + "\n"))
 
 	select {
 	case <-done:

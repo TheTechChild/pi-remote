@@ -43,7 +43,7 @@ type frameType struct {
 // closes c. The first frame must be `register`. Subsequent frames may be
 // `heartbeat`, `event` (no-op for M1), or `disconnect`.
 func (h *Handler) Serve(c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	sc := bufio.NewScanner(c)
 	sc.Buffer(make([]byte, 64*1024), maxFrameSize)

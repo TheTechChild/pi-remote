@@ -69,7 +69,7 @@ func TestListen_AcceptsConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if got := <-accepted; got == nil {
 		t.Fatal("accept returned nil conn")
