@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { EVENTS_TABLE, PI_EVENT_NAMES, type PiEventName } from "./events-table.js";
 import { startHeartbeat } from "./heartbeat.js";
 import { projectNameFromCwd } from "./project.js";
 import type { Disconnect } from "./proto/extension-daemon/disconnect.js";
+import type { Event } from "./proto/extension-daemon/event.js";
 import { buildRegister, registerWithDaemon } from "./register.js";
 import { DaemonSocket, type DaemonSocketOptions } from "./socket.js";
 
@@ -56,6 +58,35 @@ export default function piRemoteExtensionFactory(
   let stopHeartbeat: (() => void) | undefined;
   let shuttingDown = false;
   let disconnectSent = false;
+  // `registered` flips true after the daemon ACKs the register frame and
+  // flips back to false on disconnect. The Pi event handlers below drop
+  // any projection that fires while it is false, preserving the
+  // daemon-side invariant "register is the first frame." See SPEC § 6.4
+  // and batch-2 plan, Workstream A "pre-register drop policy."
+  let registered = false;
+
+  const projectAndSend = (name: PiEventName, payload: unknown): void => {
+    if (!registered) {
+      log(`dropped pre-register event: ${name}`);
+      return;
+    }
+    if (!socket || !socket.connected) {
+      // No backpressure in Batch 1; if the socket has dropped we are in
+      // reconnect territory and the next register_ack will flip
+      // `registered` back on.
+      log(`dropped event while socket disconnected: ${name}`);
+      return;
+    }
+    let frame: Event | null;
+    try {
+      frame = EVENTS_TABLE[name](payload);
+    } catch (err) {
+      log(`projector ${name} threw: ${(err as Error).message}`);
+      return;
+    }
+    if (frame === null) return;
+    socket.send(frame);
+  };
 
   const sendDisconnect = (reason: Disconnect["reason"]): void => {
     if (disconnectSent || !socket || !socket.connected) return;
@@ -67,6 +98,13 @@ export default function piRemoteExtensionFactory(
   const onSessionStart = async (): Promise<void> => {
     if (socket) return;
     socket = makeSocket({ path: socketPath });
+
+    socket.on("disconnected", () => {
+      // Suspend event projection until the next register_ack flips
+      // `registered` back on. Events fired in the disconnect window are
+      // dropped per § 7.8 / Workstream A drop policy.
+      registered = false;
+    });
 
     socket.on("reconnected", () => {
       // After a daemon restart, re-send the register with the same session_id.
@@ -81,9 +119,13 @@ export default function piRemoteExtensionFactory(
         model,
         startedAt,
       });
-      registerWithDaemon(socket as DaemonSocket, payload).catch((err: Error) => {
-        log(`re-register after reconnect failed: ${err.message}`);
-      });
+      registerWithDaemon(socket as DaemonSocket, payload)
+        .then(() => {
+          registered = true;
+        })
+        .catch((err: Error) => {
+          log(`re-register after reconnect failed: ${err.message}`);
+        });
     });
 
     try {
@@ -108,6 +150,7 @@ export default function piRemoteExtensionFactory(
     try {
       await registerWithDaemon(socket, payload);
       log(`registered with daemon (session_id=${sessionId})`);
+      registered = true;
     } catch (err) {
       log(`register rejected: ${(err as Error).message}`);
       socket.close();
@@ -123,6 +166,7 @@ export default function piRemoteExtensionFactory(
   const onSessionShutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    registered = false;
     sendDisconnect("session_shutdown");
     stopHeartbeat?.();
     stopHeartbeat = undefined;
@@ -138,6 +182,15 @@ export default function piRemoteExtensionFactory(
   ctx?.on?.("session_shutdown", () => {
     void onSessionShutdown();
   });
+
+  // Register one synchronous handler per projectable Pi event. The handler
+  // is intentionally tiny and synchronous — projection order matches Pi's
+  // event-emit order, with no setImmediate / setTimeout(0) reordering.
+  for (const name of PI_EVENT_NAMES) {
+    ctx?.on?.(name, (payload: unknown) => {
+      projectAndSend(name, payload);
+    });
+  }
 
   return {
     name: NAME,
