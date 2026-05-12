@@ -3,13 +3,27 @@ package http
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/TheTechChild/pi-remote-coordinator/internal/auth"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/clients"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/machines"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
+// C-60: Existing TestHealthReturns200 updated to new NewMux signature.
 func TestHealthReturns200(t *testing.T) {
-	srv := httptest.NewServer(NewMux())
+	deps := Deps{
+		Auth:     auth.NewStub(),
+		Machines: machines.NewRegistry(),
+		Sessions: sessions.NewRegistry(),
+		Clients:  clients.NewRegistry(clients.WithStubFixture()),
+		Logger:   slog.Default(),
+	}
+	srv := httptest.NewServer(NewMux(deps))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/v1/health")
