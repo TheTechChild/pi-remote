@@ -86,7 +86,7 @@ jobs:
           node-version: "22"
           cache: "yarn"
       - name: Install
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
       - name: Lint
         run: yarn lint
       - name: Typecheck

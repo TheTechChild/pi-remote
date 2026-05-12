@@ -1,8 +1,16 @@
 # Top-level Node / yarn
 node_modules/
 yarn-error.log
-.yarn/cache/
-.yarn/install-state.gz
+
+# Yarn 4 (Berry) — see ADR-0005. We use the node-modules linker, so PnP
+# artifacts should never appear; the entries here are defensive.
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
 
 # Codegen workspace (left over from polyrepo bootstrap; harmless if absent)
 .codegen-cache/

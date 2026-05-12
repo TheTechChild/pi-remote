@@ -10,8 +10,13 @@
     "type": "git",
     "url": "git+https://github.com/TheTechChild/pi-remote.git"
   },
-  "keywords": ["pi-package"],
-  "workspaces": ["pi-remote-ext"],
+  "keywords": [
+    "pi-package"
+  ],
+  "packageManager": "yarn@4.14.1",
+  "workspaces": [
+    "pi-remote-ext"
+  ],
   "scripts": {
     "build": "yarn workspace pi-remote-ext build",
     "typecheck": "yarn workspace pi-remote-ext typecheck",
@@ -25,6 +30,8 @@
     "node": ">=22"
   },
   "pi": {
-    "extensions": ["./pi-remote-ext/src/index.ts"]
+    "extensions": [
+      "./pi-remote-ext/src/index.ts"
+    ]
   }
 }
