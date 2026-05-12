@@ -33,7 +33,7 @@ func TestClientWS_NoCookie_403(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
@@ -50,7 +50,7 @@ func TestClientWS_FixtureCookie_101(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v (resp=%v)", err, resp)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Errorf("status = %d, want 101", resp.StatusCode)
 	}
@@ -68,7 +68,7 @@ func TestClientWS_WrongCookieValue_403(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GET: %v", err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode != http.StatusForbidden {
 				t.Errorf("status = %d, want 403", resp.StatusCode)
 			}
@@ -87,7 +87,7 @@ func TestClientWS_FirstFrameNotHello_Close1008(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 	msg, _ := json.Marshal(map[string]any{
 		"type": "something_else",
 		"v":    1,
@@ -112,7 +112,7 @@ func TestClientWS_HelloAccepted_LogsAndStaysOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 	msg, _ := json.Marshal(map[string]any{
 		"type":        "client_hello",
 		"v":           1,
@@ -148,7 +148,7 @@ func TestClientWS_UnknownClient_Close1008(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 	msg, _ := json.Marshal(map[string]any{
 		"type":        "client_hello",
 		"v":           1,
@@ -174,7 +174,7 @@ func TestClientWS_HelloMissingFields_Close1008(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 	// missing client_id and app_version
 	msg, _ := json.Marshal(map[string]any{
 		"type": "client_hello",

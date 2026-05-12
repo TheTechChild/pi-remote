@@ -102,7 +102,7 @@ func TestDaemonWS_NoAuth_403(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
@@ -119,7 +119,7 @@ func TestDaemonWS_ValidAuth_101(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v (resp=%v)", err, resp)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "test done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "test done") }()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Errorf("status = %d, want 101", resp.StatusCode)
 	}
@@ -132,7 +132,7 @@ func TestDaemonWS_FirstFrameNotRegister_Close1008(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "test done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "test done") }()
 
 	// Send a non-register frame as the very first frame.
 	msg, _ := json.Marshal(map[string]any{
@@ -165,7 +165,7 @@ func TestDaemonWS_FirstFrameRegister_Accepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "test done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "test done") }()
 
 	msg, _ := json.Marshal(map[string]any{
 		"type":                 "machine_register",
@@ -234,7 +234,7 @@ func TestDaemonWS_TakeOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial second: %v", err)
 	}
-	defer second.Close(websocket.StatusNormalClosure, "test done")
+	defer func() { _ = second.Close(websocket.StatusNormalClosure, "test done") }()
 	if err := second.Write(context.Background(), websocket.MessageText, regFrame); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestDaemonWS_MalformedJSONPostRegister_Close1008(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "test done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "test done") }()
 	regFrame, _ := json.Marshal(map[string]any{
 		"type":                 "machine_register",
 		"v":                    1,
@@ -359,7 +359,7 @@ func TestDaemonWS_RaceMultipleDaemons(t *testing.T) {
 				t.Errorf("dial %d: %v", i, err)
 				return
 			}
-			defer conn.Close(websocket.StatusNormalClosure, "done")
+			defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 
 			machineID := fmt.Sprintf("machine-%d", i)
 			sessionID := fmt.Sprintf("sess-%d", i)
@@ -444,4 +444,3 @@ func waitFor(timeout time.Duration, fn func() bool) bool {
 	}
 	return fn()
 }
-

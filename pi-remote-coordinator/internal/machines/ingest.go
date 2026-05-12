@@ -42,8 +42,8 @@ type Ingestor struct {
 	sessions *sessions.Registry
 	log      *slog.Logger
 
-	mu         sync.Mutex
-	connState  map[Conn]*connState
+	mu        sync.Mutex
+	connState map[Conn]*connState
 }
 
 type connState struct {
