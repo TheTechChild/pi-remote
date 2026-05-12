@@ -81,12 +81,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Enable Corepack
+        # Required so that setup-node and subsequent yarn invocations use the
+        # Yarn version pinned by the root package.json's packageManager field
+        # (see ADR-0005). Must run before setup-node's cache step, which calls
+        # `yarn cache dir` and would otherwise fail against the runner's
+        # global Yarn 1.22.
+        run: corepack enable
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "yarn"
       - name: Install
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
       - name: Lint
         run: yarn lint
       - name: Typecheck

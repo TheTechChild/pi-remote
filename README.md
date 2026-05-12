@@ -27,8 +27,14 @@ codegen in every consumer.
 
 ## Installing the Pi extension
 
-The root `package.json` is the pi-package manifest — installing this repo
-installs the extension:
+The root `package.json` is the pi-package manifest and the Yarn workspace
+orchestrator. The extension's actual dependencies live in
+[`pi-remote-ext/package.json`](pi-remote-ext/package.json); the root
+manifest's role is to declare the `pi.extensions` entry point, list the
+workspaces, and pin the package manager. See ADR-0005 in
+[`pi-remote-spec/adrs/`](pi-remote-spec/adrs/) for the full rationale and
+[`docs/package-management.md`](docs/package-management.md) for the
+mechanics.
 
 ```sh
 pi install git:github.com/TheTechChild/pi-remote
@@ -36,19 +42,26 @@ pi install git:github.com/TheTechChild/pi-remote
 pi install git:github.com/TheTechChild/pi-remote@v1.0.0
 ```
 
-Pi clones the whole repo, runs `npm install` at the root, reads the
-`pi.extensions` field, and loads `./pi-remote-ext/src/index.ts`. The other
-components (daemon, coordinator, android) live in the same repo but aren't
-loaded by Pi.
+Pi clones the whole repo, runs `npm install` at the root (npm understands
+the `workspaces` field and installs the ext workspace's deps into the root
+`node_modules/`), reads the `pi.extensions` field, and loads
+`./pi-remote-ext/src/index.ts`. The other components (daemon, coordinator,
+android) live in the same repo but aren't loaded by Pi.
 
 ## Building
 
-Each component builds with its own toolchain:
+Each component builds with its own toolchain. The TS extension uses Yarn 4
+(Berry) workspaces; see [`AGENTS.md`](AGENTS.md) for the short version and
+[`docs/package-management.md`](docs/package-management.md) for everything
+else.
 
 ```sh
-# Extension
+# Extension (from the repo root — delegates to the pi-remote-ext workspace)
 yarn install
 yarn build && yarn test && yarn lint
+
+# Or directly inside the workspace
+( cd pi-remote-ext && yarn build && yarn test && yarn lint )
 
 # Daemon
 ( cd pi-remote-daemon && go build ./... && go test ./... )

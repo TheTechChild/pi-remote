@@ -5,28 +5,48 @@ local `pi-remote-daemon` over a Unix socket.
 
 ## Overview
 
-This is the **extension** half of [Pi Remote](https://github.com/TheTechChild/pi-remote-spec) —
-a TypeScript module loaded by Pi at startup. It connects to the daemon's Unix
-socket, registers itself with session metadata, forwards structured events
+This is the **extension** half of [Pi Remote](../README.md) — a TypeScript
+module loaded by Pi at startup. It connects to the daemon's Unix socket,
+registers itself with session metadata, forwards structured events
 (`agent_end`, `attention_dialog`, `tool_failure`, …), and maintains a
 heartbeat. The daemon does the heavy lifting (pty mirroring, spawning,
 coordinator wire) — this extension is intentionally thin.
 
-See [`pi-remote-spec/SPEC.md`](https://github.com/TheTechChild/pi-remote-spec/blob/main/SPEC.md) §§ 6,
-10.1 for the contract.
+See [`pi-remote-spec/SPEC.md`](../pi-remote-spec/SPEC.md) §§ 6, 10.1 for the
+contract.
 
-## Setup
+## Layout note
+
+This directory is a Yarn workspace member of the [pi-remote
+monorepo](../README.md). End users install the extension through the
+monorepo root URL (see below); the root `package.json` carries the
+`pi.extensions` manifest pointing back to `./pi-remote-ext/src/index.ts`,
+and this workspace owns the actual dependency declarations.
+
+## Install (end users)
 
 ```sh
-pi install git:github.com/TheTechChild/pi-remote-ext
+pi install git:github.com/TheTechChild/pi-remote
 ```
 
-Pi will auto-load the extension on every subsequent session.
+Pi clones the monorepo, runs `npm install` at the root (npm's workspaces
+resolve this workspace's deps automatically), reads the root `pi.extensions`
+field, and loads `./pi-remote-ext/src/index.ts`. Pi auto-loads the extension
+on every subsequent session.
 
-## Build
+## Build (developers)
+
+From the repo root:
 
 ```sh
-yarn install
+yarn install        # installs the workspace
+yarn build          # delegates to this workspace
+```
+
+Or inside this workspace:
+
+```sh
+cd pi-remote-ext
 yarn build
 ```
 
@@ -41,16 +61,15 @@ yarn typecheck
 ## Codegen
 
 Wire-protocol types live in [`src/proto/`](src/proto) and are generated from
-the JSON Schema files in
-[`pi-remote-spec`](https://github.com/TheTechChild/pi-remote-spec). Regenerate with:
+the JSON Schema files in [`pi-remote-spec/`](../pi-remote-spec/) in this
+monorepo. Regenerate with:
 
 ```sh
 yarn codegen
 ```
 
-The pinned spec commit is recorded in
-[`scripts/spec-version.txt`](scripts/spec-version.txt). Bumping the pin is a
-deliberate PR (see SPEC.md § D21).
+The codegen script reads from the in-repo spec — no clone, no pin — because
+the spec lives in the same repository.
 
 ## License
 

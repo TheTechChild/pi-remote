@@ -2,9 +2,13 @@
 
 ## Status
 
-Accepted
+**Superseded by [ADR-0005](0005-yarn-berry-monorepo.md) (2026-05-12).**
 
-Date: 2026-05-07
+Accepted: 2026-05-07. Superseded: 2026-05-12.
+
+The body below is preserved as the original Phase-0 decision record. ADR-0005
+is the authoritative current statement on JS package management; it adopts
+Yarn 4 Berry, exact-version pinning, and the monorepo workspace layout.
 
 ## Context
 
