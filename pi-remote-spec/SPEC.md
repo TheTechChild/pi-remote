@@ -157,18 +157,31 @@ CF can decrypt traffic at its edge for the live session legs in v1. Push payload
 
 ## 5. Repository layout
 
-Single GitHub user (`TheTechChild`), one repo per component. Pi Remote does not need to be a monorepo — the extension ships as a Pi package, the daemon and coordinator ship as Go binaries, the app is its own Android Studio project.
+Pi Remote lives in a single monorepo (`github.com/TheTechChild/pi-remote`). Each component is a top-level subdirectory with its own toolchain; the wire-protocol schemas are committed once and consumed in-place by every component's codegen script (no clone, no pin). The monorepo layout is what makes the SPEC.md § D25 "schema change rides with regenerated outputs across every consumer in one PR" rule mechanical rather than aspirational.
 
 ```
-github.com/TheTechChild/
-├── pi-remote-ext/           # TS Pi extension, installable via `pi install git:...`
+github.com/TheTechChild/pi-remote/
+├── pi-remote-spec/          # This spec, design docs, protocol schemas, ADRs
+├── pi-remote-ext/           # TS Pi extension (Yarn workspace member; see ADR-0005)
 ├── pi-remote-daemon/        # Go, runs on each coding machine
 ├── pi-remote-coordinator/   # Go, runs on unraid in Docker
 ├── pi-remote-android/       # Kotlin Android Studio project
-└── pi-remote-spec/          # This spec, design docs, protocol schemas, ADRs
+├── docs/                    # Repo policy docs (package management, phase plans, …)
+├── AGENTS.md
+├── README.md
+├── package.json             # Monorepo workspace orchestrator + pi-package manifest
+└── yarn.lock                # Single lockfile for the JS half (developers and CI only)
 ```
 
 Wire protocol message schemas live in `pi-remote-spec/protocol/` as JSON Schema files. The extension and the Go components consume them via codegen. The Android app reads them as ground truth and consumes them via Kotlin codegen.
+
+**End-user install** of the Pi extension uses the monorepo URL:
+
+```sh
+pi install git:github.com/TheTechChild/pi-remote
+```
+
+Pi clones the repo, runs `npm install` at the root, reads the `pi.extensions` field, and loads `./pi-remote-ext/src/index.ts`. See ADR-0005 for the workspace mechanics and the implication for transitive-dep resolution at install time.
 
 ---
 
@@ -1576,11 +1589,11 @@ These were called out as deferred during the design discussion and are now decid
 | D18 | Sequence number lifecycle | Per-session `seq` counter starts at 1 and increases monotonically for the session's lifetime. Preserved across daemon restart by including `last_seq_emitted` in `session_resume`. If the daemon truly loses the counter (unclean kill), it starts at `last_known + 1000` to avoid collision with cached coordinator entries. |
 | D19 | Heartbeat intervals | Extension → daemon: every 10s. Daemon → coordinator: every 30s (TCP keepalive primary). Coordinator → client: every 30s. Timeout: 3 missed heartbeats marks the connection dead. |
 | D20 | Project name resolution timing | Computed by extension on `session_start` and sent in `register`. Daemon and coordinator do not recompute. Changes to `.pi-remote.toml` mid-session take effect only on next `session_start`. |
-| D21 | Codegen invocation | Each component's `scripts/codegen.sh` clones or updates the `pi-remote-spec` repo at a pinned commit (recorded in `scripts/spec-version.txt`), runs the language-specific generator, and writes outputs into `proto/` (or equivalent). Bumping the pinned commit is a deliberate PR. |
+| D21 | Codegen invocation | Each component's `scripts/codegen.sh` reads schemas from the in-repo `pi-remote-spec/protocol/` tree (no clone, no pin — the spec lives in the same monorepo as its consumers), runs the language-specific generator, and writes outputs into `proto/` (or equivalent). Schema changes ride with the regenerated outputs across every consumer in the same PR per § D25. |
 | D22 | License headers | Each source file in each repo carries a one-line header: `// SPDX-License-Identifier: MIT` (or `# SPDX-License-Identifier: MIT` for shell/Python/TOML). No copyright notice required at file level; LICENSE file at repo root is the authoritative copyright. |
 | D23 | Branch protection | Each repo's `main` branch requires PR + 1 approval (self-approval acceptable for solo work) + passing CI. Configured via `gh repo edit` after creation. |
 | D24 | Conventional commits | Commit messages follow Conventional Commits format: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. Enforced via PR title check in CI; not enforced on individual commits. |
-| D25 | Generated code in PRs | Codegen output is committed to git (not gitignored). PRs that change schemas in `pi-remote-spec` and bump the pinned commit in dependent repos must include the regenerated output in the same PR. CI verifies generated files are up-to-date by re-running codegen and diffing. |
+| D25 | Generated code in PRs | Codegen output is committed to git (not gitignored). PRs that change schemas in `pi-remote-spec/protocol/` must include the regenerated output from every consumer in the same PR (the monorepo layout makes this a single atomic change). CI verifies generated files are up-to-date by re-running each component's codegen and diffing. |
 
 ---
 
@@ -1593,7 +1606,7 @@ This section pins concrete libraries and versions per component. Implementation 
 | Concern | Library | Version |
 |---------|---------|---------|
 | Runtime | Node.js | ≥ 22 LTS (matches Pi's runtime) |
-| Pi extension API | `@mariozechner/pi-coding-agent` | latest at install time; track Pi releases |
+| Pi extension API | `@earendil-works/pi-coding-agent` | latest at install time; track Pi releases (declared as a `peerDependency: "*"` per pi's package conventions; the package was renamed upstream from `@mariozechner/pi-coding-agent`) |
 | Tool param schemas | `typebox` | ^0.34 |
 | Unix socket | Node `net` (stdlib) | — |
 | TOML parsing for `.pi-remote.toml` | `smol-toml` | ^1.3 |
@@ -1754,8 +1767,8 @@ Execute in order. Each task ends with the agent committing and pushing.
    - `.github/workflows/ci.yml` running install + lint + typecheck + test.
    - `src/index.ts` — default-export factory function as no-op skeleton (logs "pi-remote-ext loaded" on `session_start`).
    - `src/proto/` — codegen output via `json-schema-to-typescript`.
-   - `scripts/codegen.sh` and `scripts/spec-version.txt`.
-   - `LICENSE`, `README.md` with install instructions: `pi install git:github.com/TheTechChild/pi-remote-ext`.
+   - `scripts/codegen.sh` (reads in-repo `pi-remote-spec/protocol/`; no clone, no pin per § D21).
+   - `LICENSE`, `README.md` with install instructions: `pi install git:github.com/TheTechChild/pi-remote`.
 3. Open issues, one per milestone derived from § 6:
    - M1: Unix socket connection with reconnect
    - M2: Registration handshake
@@ -1780,7 +1793,7 @@ Execute in order. Each task ends with the agent committing and pushing.
    - `cmd/pi-remote-daemon/main.go` — reads config, logs version, exits 0 (skeleton).
    - `internal/proto/` — codegen output via `go-jsonschema`.
    - `internal/config/` — TOML loader skeleton.
-   - `scripts/codegen.sh`, `scripts/spec-version.txt`.
+   - `scripts/codegen.sh` (reads in-repo `pi-remote-spec/protocol/`; no clone, no pin per § D21).
    - `deploy/launchd/dev.pi-remote.daemon.plist` template.
    - `deploy/systemd/pi-remote-daemon.service` template.
    - `deploy/install-macos.sh` and `deploy/install-linux.sh` skeletons that print "TODO".
@@ -1809,7 +1822,7 @@ Execute in order. Each task ends with the agent committing and pushing.
    - `internal/proto/`, `internal/config/`, `internal/broker/` (skeleton with type stubs only).
    - `deploy/Dockerfile` (distroless static base).
    - `deploy/docker-compose.yaml` running coordinator + ntfy on a Docker network.
-   - `scripts/codegen.sh`, `scripts/spec-version.txt`.
+   - `scripts/codegen.sh` (reads in-repo `pi-remote-spec/protocol/`; no clone, no pin per § D21).
    - `.github/workflows/ci.yml` running `go build`, `go test`, `golangci-lint`, plus a Docker build smoke test.
    - `.gitignore`, `.editorconfig`, `LICENSE`, `README.md` with deploy instructions for unraid.
 3. Open issues per § 8's milestones:
@@ -1836,7 +1849,7 @@ Execute in order. Each task ends with the agent committing and pushing.
    - `AndroidManifest.xml` with permissions: INTERNET, POST_NOTIFICATIONS. UnifiedPush manifest entries.
    - App Link intent filter for `pi-remote://auth/callback` (D5).
    - `app/src/main/kotlin/dev/pi_remote/android/proto/` — codegen output via `quicktype`.
-   - `scripts/codegen.sh`, `scripts/spec-version.txt`.
+   - `scripts/codegen.sh` (reads in-repo `pi-remote-spec/protocol/`; no clone, no pin per § D21).
    - `.github/workflows/ci.yml` running `./gradlew lint test assembleDebug`.
    - `.gitignore`, `.editorconfig`, `LICENSE`, `README.md` with build instructions.
 3. Open issues per § 9's milestones:
