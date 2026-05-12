@@ -23,7 +23,7 @@ fi
 
 if ! command -v go-jsonschema >/dev/null 2>&1; then
   echo "installing github.com/atombender/go-jsonschema..." >&2
-  GOBIN="${bin_dir}" go install github.com/atombender/go-jsonschema/cmd/go-jsonschema@latest
+  GOBIN="${bin_dir}" go install github.com/atombender/go-jsonschema@latest
   export PATH="${bin_dir}:${PATH}"
 fi
 

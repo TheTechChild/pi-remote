@@ -2,11 +2,22 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
+	"net"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/TheTechChild/pi-remote-daemon/internal/config"
+	"github.com/TheTechChild/pi-remote-daemon/internal/session"
+	"github.com/TheTechChild/pi-remote-daemon/internal/socket"
 )
 
 // Version is set at build time via -ldflags; default value is for local builds.
@@ -18,7 +29,7 @@ func main() {
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: slog.LevelDebug,
 	}))
 	slog.SetDefault(logger)
 
@@ -28,14 +39,131 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("pi-remote-daemon",
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, cfg, logger); err != nil {
+		slog.Error("daemon exited with error", "err", err)
+		os.Exit(1)
+	}
+}
+
+// run owns the daemon's accept loop and shutdown sequence. Extracted from
+// main so signal-driven shutdown is testable from a black-box _test package.
+func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	socketPath, err := expandPath(cfg.Socket.Path)
+	if err != nil {
+		return fmt.Errorf("expand socket path: %w", err)
+	}
+
+	registry := session.NewRegistry()
+	ln, err := socket.Listen(socketPath)
+	if err != nil {
+		return err
+	}
+	log.Info("pi-remote-daemon",
 		"version", Version,
 		"machine_id", cfg.MachineID,
-		"socket", cfg.Socket.Path,
+		"socket", ln.Path(),
 	)
+	log.Info("socket listening", "path", ln.Path())
 
-	// Phase 0: skeleton only. Real responsibilities (Unix socket listener,
-	// tmux control mode, coordinator websocket, suspend detection) are
-	// implemented in milestones M1-M10.
-	os.Exit(0)
+	handler := socket.NewHandler(registry, log)
+	conns := newConnTracker()
+
+	var wg sync.WaitGroup
+	acceptDone := make(chan struct{})
+	go acceptLoop(ln, handler, conns, &wg, log, acceptDone)
+
+	<-ctx.Done()
+	log.Info("shutdown signal received, closing listener")
+
+	if cerr := ln.Close(); cerr != nil {
+		log.Warn("listener close error", "err", cerr)
+	}
+	<-acceptDone
+	// Close in-flight connections so their Serve goroutines unblock and
+	// exit. Without this the wg.Wait below would deadlock waiting for an
+	// extension that has nothing more to say.
+	conns.closeAll()
+	wg.Wait()
+	log.Info("daemon stopped")
+	return nil
+}
+
+// acceptLoop runs until ln.Accept returns a non-temporary error (i.e., the
+// listener is closed during shutdown).
+func acceptLoop(ln *socket.Listener, h *socket.Handler, conns *connTracker, wg *sync.WaitGroup, log *slog.Logger, done chan<- struct{}) {
+	defer close(done)
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Warn("accept error", "err", err)
+			return
+		}
+		conns.add(c)
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer wg.Done()
+			defer conns.remove(c)
+			h.Serve(c)
+		}(c)
+	}
+}
+
+// connTracker holds the set of active extension connections so shutdown can
+// drop them all at once. Membership is short-lived: Serve removes its own
+// entry on return.
+type connTracker struct {
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+func newConnTracker() *connTracker {
+	return &connTracker{conns: make(map[net.Conn]struct{})}
+}
+
+func (t *connTracker) add(c net.Conn) {
+	t.mu.Lock()
+	t.conns[c] = struct{}{}
+	t.mu.Unlock()
+}
+
+func (t *connTracker) remove(c net.Conn) {
+	t.mu.Lock()
+	delete(t.conns, c)
+	t.mu.Unlock()
+}
+
+func (t *connTracker) closeAll() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for c := range t.conns {
+		_ = c.Close()
+	}
+}
+
+// expandPath resolves a leading ~ to the user's home directory. Relative
+// (non-~) paths and absolute paths pass through.
+func expandPath(p string) (string, error) {
+	if p == "" {
+		return "", errors.New("empty path")
+	}
+	if !strings.HasPrefix(p, "~") {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if p == "~" {
+		return home, nil
+	}
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(home, p[2:]), nil
+	}
+	return "", fmt.Errorf("unsupported ~user path: %s", p)
 }
