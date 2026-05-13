@@ -166,8 +166,10 @@ func (h *Handler) dispatch(sessionID string, line []byte) (done bool) {
 		return false
 
 	case "event":
-		// M1 acknowledges events but does not project them. Coordinator
-		// fan-out lands in M3/M4.
+		// Forward the raw bytes to the registry; the multiplex (if wired)
+		// parses and projects them upstream. Per M3+M4: bytes pass through
+		// verbatim; the registry does not validate the event schema.
+		h.registry.Event(sessionID, line)
 		return false
 
 	case "disconnect":
@@ -176,7 +178,12 @@ func (h *Handler) dispatch(sessionID string, line []byte) (done bool) {
 			h.log.Warn("invalid disconnect frame", slog.String("err", err.Error()))
 			return true
 		}
-		h.registry.Remove(sessionID)
+		// RemoveWithReason propagates the ext-side reason to the
+		// registry's OnEnded callback. The multiplex collapses all
+		// ext-side reasons (session_shutdown / client_request / error)
+		// to the single upstream reason 'extension_disconnect' per the
+		// schema.
+		h.registry.RemoveWithReason(sessionID, string(d.Reason))
 		h.log.Info("session disconnected",
 			slog.String("session_id", sessionID),
 			slog.String("reason", string(d.Reason)))

@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/TheTechChild/pi-remote-daemon/internal/config"
+	"github.com/TheTechChild/pi-remote-daemon/internal/coordinator"
 	"github.com/TheTechChild/pi-remote-daemon/internal/session"
 	"github.com/TheTechChild/pi-remote-daemon/internal/socket"
 )
@@ -75,6 +76,49 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	acceptDone := make(chan struct{})
 	go acceptLoop(ln, handler, conns, &wg, log, acceptDone)
 
+	// Wire the coordinator client + session multiplex if the daemon is
+	// configured to talk to a coordinator. The bootstrap is
+	// circular-free thanks to lazy late-binding: the multiplex needs a
+	// Coord, the client needs a LiveSnapshot. We construct the client
+	// first with a placeholder LiveSnapshot, then construct the
+	// multiplex over the client, then patch the placeholder to point at
+	// the multiplex's real LiveSessions method.
+	coordCtx, coordCancel := context.WithCancel(context.Background())
+	defer coordCancel()
+	var coordDone chan struct{}
+	if cfg.Coordinator.URL != "" {
+		var mux *session.Multiplex
+		coordCfg := coordinator.Config{
+			URL:        cfg.Coordinator.URL,
+			IDFile:     cfg.Coordinator.ServiceTokenIDFile,
+			SecretFile: cfg.Coordinator.ServiceTokenSecretFile,
+			MachineRegister: coordinator.MachineRegisterInput{
+				MachineID:          cfg.MachineID,
+				MachineDisplayName: cfg.MachineDisplayName,
+				DaemonVersion:      Version,
+			},
+			LiveSnapshot: func() []session.LiveSession {
+				if mux == nil {
+					return nil
+				}
+				return mux.LiveSessions()
+			},
+			Clock:  coordinator.RealClock(),
+			Logger: log,
+		}
+		client := coordinator.NewClient(coordCfg)
+		frames := coordinator.FrameBuilder{MachineID: cfg.MachineID}
+		mux = session.NewMultiplex(registry, client, frames, cfg.MachineID, nil)
+		coordDone = make(chan struct{})
+		go func() {
+			defer close(coordDone)
+			_ = client.Run(coordCtx)
+		}()
+		log.Info("coordinator client started", "url", cfg.Coordinator.URL)
+	} else {
+		log.Info("coordinator URL not configured; skipping client startup")
+	}
+
 	<-ctx.Done()
 	log.Info("shutdown signal received, closing listener")
 
@@ -87,6 +131,14 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// extension that has nothing more to say.
 	conns.closeAll()
 	wg.Wait()
+
+	// Stop the coordinator client (if started) and wait for it to
+	// finish so its goroutine doesn't leak past process exit.
+	coordCancel()
+	if coordDone != nil {
+		<-coordDone
+	}
+
 	log.Info("daemon stopped")
 	return nil
 }
