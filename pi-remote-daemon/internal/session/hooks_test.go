@@ -195,9 +195,9 @@ func TestRegistry_OnStateChange_HookExistsButUnfired(t *testing.T) {
 	require.True(t, mustRegister(t, r, s))
 	require.NoError(t, r.UpdateHeartbeat("sess-1", time.Now()))
 	r.Event("sess-1", []byte(`{}`))
-	r.MarkEnded("sess-1")     // flips State to ended, but the hook is
+	r.MarkEnded("sess-1")             // flips State to ended, but the hook is
 	r.RemoveWithReason("sess-1", "x") // for explicit transitions tracked
-	                                  // by #42, which doesn't exist yet.
+	// by #42, which doesn't exist yet.
 
 	require.EqualValues(t, 0, calls.Load(), "no M3+M4 codepath should fire OnStateChange")
 }
@@ -303,4 +303,3 @@ func mustRegister(t *testing.T, r *session.Registry, s *session.Session) bool {
 	}
 	return accepted
 }
-

@@ -4,10 +4,10 @@
 // coordinator endpoint (SPEC § 7.8, § 10.2). It is split into three files:
 //
 //   - frames.go : typed-frame helpers wrapping the generated wire types.
-//                 Pure data, no I/O. Source of truth for the literal
-//                 "type" / "v" values the schemas require.
+//     Pure data, no I/O. Source of truth for the literal
+//     "type" / "v" values the schemas require.
 //   - auth.go   : service-token credential loading from D13/D14 file paths.
-//                 Pure file I/O, no network.
+//     Pure file I/O, no network.
 //   - client.go : dial loop, reconnect, send/recv split. Owns the network.
 //
 // All wire frames are JSON text frames per SPEC § 10 and the Batch 2 plan.
