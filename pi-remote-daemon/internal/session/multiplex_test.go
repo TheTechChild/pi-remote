@@ -90,14 +90,75 @@ func asMap(t *testing.T, frame any) map[string]any {
 	return m
 }
 
+// stubFrames is the in-test FrameBuilder. Produces plain map[string]any
+// frames matching the daemon-coordinator schemas; the stub coord
+// captures them and tests assert on the literal wire shape via
+// asMap (encode-then-decode). Avoids importing the real coordinator
+// package from session_test.
+type stubFrames struct{}
+
+func (stubFrames) SessionStarted(s session.Session, machineID, hostnameFallback string) any {
+	host := s.Hostname
+	if host == "" {
+		host = hostnameFallback
+	}
+	md := map[string]any{
+		"cwd":          s.CWD,
+		"project_name": s.ProjectName,
+		"hostname":     host,
+		"model":        s.Model,
+		"started_at":   s.StartedAt.UnixMilli(),
+	}
+	if s.SpawnToken != "" {
+		md["spawn_token"] = s.SpawnToken
+	}
+	return map[string]any{
+		"type":       "session_started",
+		"v":          1,
+		"session_id": s.SessionID,
+		"machine_id": machineID,
+		"metadata":   md,
+	}
+}
+
+func (stubFrames) SessionEvent(sessionID string, seq uint64, kind string, ts time.Time, data map[string]any) any {
+	if data == nil {
+		data = map[string]any{}
+	}
+	return map[string]any{
+		"type":       "session_event",
+		"v":          1,
+		"session_id": sessionID,
+		"seq":        seq,
+		"kind":       kind,
+		"ts":         ts.UnixMilli(),
+		"data":       data,
+	}
+}
+
+func (stubFrames) SessionEnded(sessionID string, seq uint64, kind session.EndedKind) any {
+	reason := "extension_disconnect"
+	if kind == session.EndedImplicit {
+		reason = "process_exit"
+	}
+	return map[string]any{
+		"type":       "session_ended",
+		"v":          1,
+		"session_id": sessionID,
+		"seq":        seq,
+		"reason":     reason,
+	}
+}
+
 // startMultiplex is a test helper that constructs a Multiplex over a
-// fresh registry + stub coord with a fixed clock for deterministic ts.
+// fresh registry + stub coord + stub frame builder with a fixed clock
+// for deterministic ts.
 func startMultiplex(t *testing.T) (*session.Registry, *stubCoord, *session.Multiplex) {
 	t.Helper()
 	reg := session.NewRegistry()
 	coord := newStubCoord()
 	clock := func() time.Time { return time.UnixMilli(1730000000000) }
-	mux := session.NewMultiplex(reg, coord, "macbook-pro", clock)
+	mux := session.NewMultiplex(reg, coord, stubFrames{}, "macbook-pro", clock)
 	require.NotNil(t, mux)
 	return reg, coord, mux
 }
@@ -436,8 +497,10 @@ func TestMultiplex_LiveSessions_ReturnsSnapshotForResume(t *testing.T) {
 	for _, ls := range live {
 		bySID[ls.Session.SessionID] = ls.LastSeq
 	}
-	require.EqualValues(t, 3, bySID["sess-A"], "A: started(1) + 2 events = LastSeq 3")
-	require.EqualValues(t, 2, bySID["sess-B"], "B: started(1) + 1 event = LastSeq 2")
+	// session_started has no seq in the schema; only session_event /
+	// session_pty / session_state_change / session_ended consume seq.
+	require.EqualValues(t, 2, bySID["sess-A"], "A: 2 events = LastSeq 2")
+	require.EqualValues(t, 1, bySID["sess-B"], "B: 1 event = LastSeq 1")
 }
 
 // M16: TestMultiplex_EndedSession_DropsFromLive — Resume must not
