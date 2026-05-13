@@ -11,3 +11,15 @@ orchestrator. Run scripts from the repo root (`yarn build`, `yarn test`,
 
 See [`docs/package-management.md`](docs/package-management.md) for the full
 rationale, the layered-override strategy, and the upgrade procedure.
+
+## Go local development
+
+The two Go workspaces (`pi-remote-coordinator/` and `pi-remote-daemon/`)
+have a pre-push checklist that goes beyond `go test ./...`. CI runs
+`gofmt`, `golangci-lint`, `go test -race`, **and** a `docker build` of
+the production Dockerfile — each of which can fail independently of the
+test suite. Run them locally before pushing.
+
+See [`docs/go-local-dev.md`](docs/go-local-dev.md) for the full
+checklist, why each step matters, and the one-liner to paste before
+`git push`.

@@ -36,10 +36,18 @@ go build ./...
 
 ## Test
 
+For day-to-day work:
+
 ```sh
 go test ./...
-golangci-lint run
 ```
+
+Before pushing a branch, run the **full pre-push checklist** — `gofmt`,
+`go vet`, `golangci-lint`, `go test -race`, and (when the Dockerfile or
+dependency graph has changed) a local `docker build`. Skipping any of
+these has bitten the project at least twice. See
+[`../docs/go-local-dev.md`](../docs/go-local-dev.md) for the full
+checklist and the one-liner.
 
 ## Codegen
 

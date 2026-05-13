@@ -35,10 +35,17 @@ go build -ldflags "-X main.Version=$(git rev-parse --short HEAD)" ./cmd/pi-remot
 
 ## Test
 
+For day-to-day work:
+
 ```sh
 go test ./...
-golangci-lint run
 ```
+
+Before pushing a branch, run the **full pre-push checklist** — `gofmt`,
+`go vet`, `golangci-lint`, `go test -race`, and (when the Dockerfile or
+dependency graph has changed) a local `docker build`. See
+[`../docs/go-local-dev.md`](../docs/go-local-dev.md) for the full
+checklist and the one-liner.
 
 ## Codegen
 
