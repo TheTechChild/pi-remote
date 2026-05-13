@@ -99,6 +99,29 @@ list against future need but is not currently imported by the daemon.
 When a future change introduces a daemon-minted UUID, the dep is added
 then, governed by [`docs/go-dependencies.md`](../docs/go-dependencies.md).
 
+### Config loader is Phase-0 stub; CLI flags are a dev affordance (#48)
+
+`internal/config/config.go` currently returns a hardcoded `*Config`
+rather than parsing the TOML file SPEC § 7.3 specifies. The real
+loader is tracked in #48 and lands as a separate piece of work.
+
+Until then, four CLI flags on `cmd/pi-remote-daemon` override the
+bare-minimum operator-supplied values so local development against a
+stub coordinator (`pi-remote-coordinator -auth=stub`) works without
+populating `/etc/pi-remote/`:
+
+```sh
+go run ./cmd/pi-remote-daemon \
+  -coordinator-url=ws://localhost:8080/v1/daemon \
+  -machine-id=test-machine \
+  -service-token-id-file=/tmp/pi-remote-test-id \
+  -service-token-secret-file=/tmp/pi-remote-test-secret
+```
+
+When #48 lands, these flags stay as the top of the
+flag > env > file > defaults precedence chain documented in that
+issue's design.
+
 ## Deploy
 
 - macOS: see [`deploy/install-macos.sh`](deploy/install-macos.sh) and

@@ -24,9 +24,28 @@ import (
 // Version is set at build time via -ldflags; default value is for local builds.
 var Version = "0.0.0-dev"
 
+// flagOverrides bundles the dev-affordance CLI flags. Per #48 these are
+// a stop-gap until the real TOML loader lands; they let `go run` work
+// against a local coordinator without populating /etc/pi-remote/.
+// When the loader lands these become the top of the
+// flag > env > file > defaults precedence chain.
+type flagOverrides struct {
+	coordinatorURL  string
+	machineID       string
+	tokenIDFile     string
+	tokenSecretFile string
+}
+
 func main() {
-	var cfgPath string
+	var (
+		cfgPath string
+		ovr     flagOverrides
+	)
 	flag.StringVar(&cfgPath, "config", "", "path to daemon.toml; empty = search default locations")
+	flag.StringVar(&ovr.coordinatorURL, "coordinator-url", "", "override coordinator WebSocket URL (e.g. ws://localhost:8080/v1/daemon); dev affordance, see #48")
+	flag.StringVar(&ovr.machineID, "machine-id", "", "override machine_id; dev affordance, see #48")
+	flag.StringVar(&ovr.tokenIDFile, "service-token-id-file", "", "override path to the CF service-token ID file; dev affordance, see #48")
+	flag.StringVar(&ovr.tokenSecretFile, "service-token-secret-file", "", "override path to the CF service-token secret file; dev affordance, see #48")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -39,6 +58,7 @@ func main() {
 		slog.Error("config load failed", "err", err)
 		os.Exit(1)
 	}
+	applyFlagOverrides(cfg, ovr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -46,6 +66,24 @@ func main() {
 	if err := run(ctx, cfg, logger); err != nil {
 		slog.Error("daemon exited with error", "err", err)
 		os.Exit(1)
+	}
+}
+
+// applyFlagOverrides mutates cfg in place with any non-empty flag
+// values. Empty flag = no override = keep what the loader returned.
+// Public only for the integration test (same _test package).
+func applyFlagOverrides(cfg *config.Config, ovr flagOverrides) {
+	if ovr.coordinatorURL != "" {
+		cfg.Coordinator.URL = ovr.coordinatorURL
+	}
+	if ovr.machineID != "" {
+		cfg.MachineID = ovr.machineID
+	}
+	if ovr.tokenIDFile != "" {
+		cfg.Coordinator.ServiceTokenIDFile = ovr.tokenIDFile
+	}
+	if ovr.tokenSecretFile != "" {
+		cfg.Coordinator.ServiceTokenSecretFile = ovr.tokenSecretFile
 	}
 }
 

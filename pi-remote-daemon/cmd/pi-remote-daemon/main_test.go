@@ -138,3 +138,76 @@ func TestExpandPath_EmptyErrors(t *testing.T) {
 		t.Fatal("expandPath(\"\") should error")
 	}
 }
+
+// TestApplyFlagOverrides_AllSet exercises the dev-affordance flag
+// override chain. Per #48 these flags are a stop-gap until the real
+// TOML loader lands; this test pins their behavior.
+func TestApplyFlagOverrides_AllSet(t *testing.T) {
+	cfg := &config.Config{}
+	applyFlagOverrides(cfg, flagOverrides{
+		coordinatorURL:  "ws://localhost:8080/v1/daemon",
+		machineID:       "test-machine",
+		tokenIDFile:     "/tmp/id",
+		tokenSecretFile: "/tmp/secret",
+	})
+	if cfg.Coordinator.URL != "ws://localhost:8080/v1/daemon" {
+		t.Errorf("Coordinator.URL = %q", cfg.Coordinator.URL)
+	}
+	if cfg.MachineID != "test-machine" {
+		t.Errorf("MachineID = %q", cfg.MachineID)
+	}
+	if cfg.Coordinator.ServiceTokenIDFile != "/tmp/id" {
+		t.Errorf("ServiceTokenIDFile = %q", cfg.Coordinator.ServiceTokenIDFile)
+	}
+	if cfg.Coordinator.ServiceTokenSecretFile != "/tmp/secret" {
+		t.Errorf("ServiceTokenSecretFile = %q", cfg.Coordinator.ServiceTokenSecretFile)
+	}
+}
+
+// TestApplyFlagOverrides_EmptyKeepsExisting confirms empty flags do
+// not clobber loader-supplied values. When the TOML loader lands, this
+// is the contract that lets it set the values and the flags layer
+// over the top.
+func TestApplyFlagOverrides_EmptyKeepsExisting(t *testing.T) {
+	cfg := &config.Config{
+		MachineID: "from-loader",
+		Coordinator: config.CoordinatorConfig{
+			URL:                    "wss://prod.example.com/v1/daemon",
+			ServiceTokenIDFile:     "/etc/pi-remote/service_token_id",
+			ServiceTokenSecretFile: "/etc/pi-remote/service_token_secret",
+		},
+	}
+	applyFlagOverrides(cfg, flagOverrides{})
+	if cfg.MachineID != "from-loader" {
+		t.Errorf("empty -machine-id clobbered loader value: %q", cfg.MachineID)
+	}
+	if cfg.Coordinator.URL != "wss://prod.example.com/v1/daemon" {
+		t.Errorf("empty -coordinator-url clobbered loader value: %q", cfg.Coordinator.URL)
+	}
+	if cfg.Coordinator.ServiceTokenIDFile != "/etc/pi-remote/service_token_id" {
+		t.Error("empty -service-token-id-file clobbered loader value")
+	}
+	if cfg.Coordinator.ServiceTokenSecretFile != "/etc/pi-remote/service_token_secret" {
+		t.Error("empty -service-token-secret-file clobbered loader value")
+	}
+}
+
+// TestApplyFlagOverrides_PartialOverride confirms each flag is
+// independent - setting one doesn't reset the others.
+func TestApplyFlagOverrides_PartialOverride(t *testing.T) {
+	cfg := &config.Config{
+		MachineID: "from-loader",
+		Coordinator: config.CoordinatorConfig{
+			URL: "wss://prod.example.com/v1/daemon",
+		},
+	}
+	applyFlagOverrides(cfg, flagOverrides{
+		coordinatorURL: "ws://localhost:8080/v1/daemon",
+	})
+	if cfg.Coordinator.URL != "ws://localhost:8080/v1/daemon" {
+		t.Errorf("URL override did not apply: %q", cfg.Coordinator.URL)
+	}
+	if cfg.MachineID != "from-loader" {
+		t.Errorf("unrelated MachineID got clobbered: %q", cfg.MachineID)
+	}
+}
