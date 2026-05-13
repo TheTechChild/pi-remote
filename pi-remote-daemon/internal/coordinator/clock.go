@@ -1,30 +1,42 @@
 // SPDX-License-Identifier: MIT
 package coordinator
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Clock abstracts time.Now and time.Sleep so the reconnect-backoff loop
 // is deterministically testable. The production implementation
 // (realClock) delegates to the stdlib; the test stub controls advance
 // explicitly.
 //
-// Pattern: the multiplex needs a "wall clock" (just Now); the client
-// needs a "wall clock plus sleep" because backoff requires sleep. Two
-// interfaces keep each consumer's needs honest.
+// Sleep is context-aware: it returns early with ctx.Err() if the
+// context is canceled mid-sleep. Without this, the run loop cannot
+// shut down cleanly during a backoff window.
 type Clock interface {
 	Now() time.Time
-	// Sleep blocks until the duration has passed in clock time. The
-	// real impl is time.Sleep; the fake impl notifies the test that a
-	// sleep was requested and waits for the test to advance.
-	Sleep(d time.Duration)
+	// Sleep blocks until d has passed in clock time or ctx is canceled.
+	// Returns nil on full sleep, ctx.Err() on early exit.
+	Sleep(ctx context.Context, d time.Duration) error
 }
 
 // realClock is the production implementation. Stateless; zero value is
 // usable.
 type realClock struct{}
 
-func (realClock) Now() time.Time        { return time.Now() }
-func (realClock) Sleep(d time.Duration) { time.Sleep(d) }
+func (realClock) Now() time.Time { return time.Now() }
+
+func (realClock) Sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 
 // RealClock returns the production Clock implementation.
 func RealClock() Clock { return realClock{} }

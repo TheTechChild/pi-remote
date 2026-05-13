@@ -21,6 +21,54 @@ import (
 	"github.com/TheTechChild/pi-remote-daemon/internal/session"
 )
 
+// FrameBuilder is the seam between the daemon's session multiplex and
+// this package's typed-frame helpers. Each method returns a *pb.* value
+// ready for json.Marshal. The multiplex consumes it through
+// session.FrameBuilder (defined in the session package per
+// accept-interfaces).
+//
+// Implementing FrameBuilder as a free-function vendor (rather than
+// methods on a struct) keeps this package's API surface small; the
+// adapter type below has zero state.
+type FrameBuilder struct {
+	MachineID        string
+	HostnameFallback string
+}
+
+// SessionStarted satisfies session.FrameBuilder.SessionStarted.
+func (b FrameBuilder) SessionStarted(s session.Session, machineID, hostnameFallback string) any {
+	// The interface form takes machineID + hostnameFallback as args so
+	// the test stub can vary them per call; the production wiring passes
+	// b.MachineID / b.HostnameFallback as defaults but lets callers
+	// override.
+	if machineID == "" {
+		machineID = b.MachineID
+	}
+	if hostnameFallback == "" {
+		hostnameFallback = b.HostnameFallback
+	}
+	return NewSessionStarted(s, machineID, hostnameFallback)
+}
+
+// SessionEvent satisfies session.FrameBuilder.SessionEvent.
+func (b FrameBuilder) SessionEvent(sessionID string, seq uint64, kind string, ts time.Time, data map[string]any) any {
+	return NewSessionEvent(sessionID, seq, kind, ts, data)
+}
+
+// SessionEnded satisfies session.FrameBuilder.SessionEnded. Maps the
+// session-package EndedKind tag to the schema's reason enum:
+// EndedExplicit -> extension_disconnect, EndedImplicit -> process_exit.
+func (b FrameBuilder) SessionEnded(sessionID string, seq uint64, kind session.EndedKind) any {
+	reason := ReasonExtensionDisconnect
+	if kind == session.EndedImplicit {
+		reason = ReasonProcessExit
+	}
+	return NewSessionEnded(sessionID, seq, reason)
+}
+
+// Compile-time guard that FrameBuilder satisfies session.FrameBuilder.
+var _ session.FrameBuilder = FrameBuilder{}
+
 // MachineRegisterInput is the daemon-side description of the machine
 // announced to the coordinator on connect. Lifted from config.MachineID /
 // config.MachineDisplayName + the daemon's build-time version.

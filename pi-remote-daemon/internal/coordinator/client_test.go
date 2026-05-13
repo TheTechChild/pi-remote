@@ -44,13 +44,19 @@ func (c *fakeClock) Now() time.Time {
 	return c.now
 }
 
-func (c *fakeClock) Sleep(d time.Duration) {
+func (c *fakeClock) Sleep(ctx context.Context, d time.Duration) error {
 	c.mu.Lock()
 	c.requests = append(c.requests, d)
 	c.pending <- struct{}{}
 	c.mu.Unlock()
-	// Block until the test signals completion via Advance.
-	<-c.advanceCh()
+	// Block until the test signals completion via Advance, or until
+	// ctx is canceled (production semantics).
+	select {
+	case <-c.advanceCh():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *fakeClock) Requests() []time.Duration {
