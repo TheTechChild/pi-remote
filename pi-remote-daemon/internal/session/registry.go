@@ -3,9 +3,19 @@ package session
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
+
+// ErrUnknownSession is returned by registry mutators when the named session
+// is not registered.
+var ErrUnknownSession = errors.New("session: unknown session_id")
+
+// ErrCodeDuplicateSessionID is the rejection reason returned in register_ack
+// when a session_id is already known to the daemon for a different pid.
+// See pi-remote-spec/errors/codes.md.
+const ErrCodeDuplicateSessionID = "ERR_DAEMON_DUPLICATE_SESSION_ID"
 
 // EndedKind tags the OnEnded callback so consumers (the multiplex) can
 // pick the upstream reason without inspecting state.
@@ -22,14 +32,9 @@ const (
 	EndedImplicit
 )
 
-// ErrUnknownSession is returned by registry mutators when the named session
-// is not registered.
-var ErrUnknownSession = errors.New("session: unknown session_id")
-
-// ErrCodeDuplicateSessionID is the rejection reason returned in register_ack
-// when a session_id is already known to the daemon for a different pid.
-// See pi-remote-spec/errors/codes.md.
-const ErrCodeDuplicateSessionID = "ERR_DAEMON_DUPLICATE_SESSION_ID"
+// nowFn is the clock the registry uses to stamp EndedAt. Variable so
+// tests could replace it; production stays on time.Now.
+var nowFn = time.Now
 
 // Registry is the daemon's in-memory map of active and recently-ended Pi
 // sessions. Concurrent access is guarded by a single RWMutex; per SPEC § 7.5
@@ -44,6 +49,9 @@ const ErrCodeDuplicateSessionID = "ERR_DAEMON_DUPLICATE_SESSION_ID"
 type Registry struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+	ended    map[string]bool // tracks "OnEnded fired" so the second
+	// terminal call is a no-op even after the
+	// entry has been Removed.
 
 	hookMu        sync.RWMutex
 	onRegister    func(s *Session)
@@ -54,7 +62,10 @@ type Registry struct {
 }
 
 func NewRegistry() *Registry {
-	return &Registry{sessions: make(map[string]*Session)}
+	return &Registry{
+		sessions: make(map[string]*Session),
+		ended:    make(map[string]bool),
+	}
 }
 
 // OnRegister installs a callback fired after a successful Register that
@@ -62,7 +73,9 @@ func NewRegistry() *Registry {
 // NOT fire the callback again; only the initial registration does. The
 // multiplex uses this to emit `session_started`.
 func (r *Registry) OnRegister(fn func(s *Session)) {
-	_ = fn // RED-phase stub.
+	r.hookMu.Lock()
+	r.onRegister = fn
+	r.hookMu.Unlock()
 }
 
 // OnHeartbeat installs a callback fired after a successful
@@ -71,35 +84,63 @@ func (r *Registry) OnRegister(fn func(s *Session)) {
 // the hook exists so future heartbeat-timeout work (#42) has a place to
 // plug in.
 func (r *Registry) OnHeartbeat(fn func(id string, ts time.Time)) {
-	_ = fn // RED-phase stub.
+	r.hookMu.Lock()
+	r.onHeartbeat = fn
+	r.hookMu.Unlock()
 }
 
 // OnEnded installs a callback fired exactly once per session ending,
 // from either RemoveWithReason (kind=EndedExplicit) or MarkEnded
 // (kind=EndedImplicit). Subsequent calls on the same id are no-ops.
 func (r *Registry) OnEnded(fn func(s *Session, kind EndedKind, reason string)) {
-	_ = fn // RED-phase stub.
+	r.hookMu.Lock()
+	r.onEnded = fn
+	r.hookMu.Unlock()
 }
 
 // OnEvent installs a callback fired by Event. The bytes are the raw
 // extension-side `event` frame; the multiplex parses them.
 func (r *Registry) OnEvent(fn func(id string, eventBytes []byte)) {
-	_ = fn // RED-phase stub.
+	r.hookMu.Lock()
+	r.onEvent = fn
+	r.hookMu.Unlock()
 }
 
 // OnStateChange is reserved for #42 (heartbeat-timeout detection) and
 // later state-transition work. Currently no codepath in M3+M4 fires it;
 // the hook is plumbed so the future work can subscribe without surgery.
 func (r *Registry) OnStateChange(fn func(id string, from, to SessionState)) {
-	_ = fn // RED-phase stub.
+	r.hookMu.Lock()
+	r.onStateChange = fn
+	r.hookMu.Unlock()
 }
 
-// Event fans out an extension-side event frame to the OnEvent callback.
-// Bytes are passed through verbatim; the registry does no parsing.
-func (r *Registry) Event(id string, eventBytes []byte) {
-	_ = id
-	_ = eventBytes
-	// RED-phase stub.
+// hookSnapshot returns the currently-installed callbacks under the hook
+// mutex. Returning by value lets the caller release the lock before
+// invoking, so callbacks can re-enter the registry safely.
+func (r *Registry) hookSnapshot() (
+	onRegister func(s *Session),
+	onHeartbeat func(id string, ts time.Time),
+	onEnded func(s *Session, kind EndedKind, reason string),
+	onEvent func(id string, eventBytes []byte),
+) {
+	r.hookMu.RLock()
+	defer r.hookMu.RUnlock()
+	return r.onRegister, r.onHeartbeat, r.onEnded, r.onEvent
+}
+
+// safeInvoke runs fn under a deferred recover so a panicking callback
+// does not propagate out of the registry. Logs the recovered value at
+// WARN with the callback's name for diagnostic context.
+func safeInvoke(name string, fn func()) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Warn("registry callback panicked",
+				slog.String("callback", name),
+				slog.Any("panic", rec))
+		}
+	}()
+	fn()
 }
 
 // Register stores s if no entry exists for s.SessionID, or refreshes the
@@ -107,26 +148,53 @@ func (r *Registry) Event(id string, eventBytes []byte) {
 // after an ext-side socket reconnect). Returns (false,
 // ErrCodeDuplicateSessionID) when the session_id is taken by a different
 // pid; the caller forwards this verbatim to register_ack.reason.
+//
+// Fires OnRegister exactly once per initially-accepted session;
+// idempotent re-registrations do NOT re-fire.
 func (r *Registry) Register(s *Session) (accepted bool, reason string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	existing, ok := r.sessions[s.SessionID]
-	if ok && existing.PID != s.PID {
+	existing, present := r.sessions[s.SessionID]
+	isNew := !present
+	if present && existing.PID != s.PID {
+		r.mu.Unlock()
 		return false, ErrCodeDuplicateSessionID
 	}
 	r.sessions[s.SessionID] = s
+	r.mu.Unlock()
+
+	if isNew {
+		onRegister, _, _, _ := r.hookSnapshot()
+		if onRegister != nil {
+			safeInvoke("OnRegister", func() { onRegister(s) })
+		}
+	}
 	return true, ""
 }
 
 func (r *Registry) UpdateHeartbeat(id string, ts time.Time) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
 	if !ok {
+		r.mu.Unlock()
 		return ErrUnknownSession
 	}
 	s.LastHeartbeat = ts
+	r.mu.Unlock()
+
+	_, onHeartbeat, _, _ := r.hookSnapshot()
+	if onHeartbeat != nil {
+		safeInvoke("OnHeartbeat", func() { onHeartbeat(id, ts) })
+	}
 	return nil
+}
+
+// Event fans out an extension-side event frame to the OnEvent callback.
+// Bytes are passed through verbatim; the registry does no parsing.
+func (r *Registry) Event(id string, eventBytes []byte) {
+	_, _, _, onEvent := r.hookSnapshot()
+	if onEvent != nil {
+		safeInvoke("OnEvent", func() { onEvent(id, eventBytes) })
+	}
 }
 
 // Remove deletes the entry. Thin wrapper around RemoveWithReason(id, "")
@@ -145,11 +213,22 @@ func (r *Registry) Remove(id string) {
 // If MarkEnded already fired OnEnded for this session, this call is a
 // no-op (one OnEnded per session lifetime).
 func (r *Registry) RemoveWithReason(id, reason string) {
-	_ = reason
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	s, present := r.sessions[id]
+	alreadyEnded := r.ended[id]
+	if present && !alreadyEnded {
+		s.EndedAt = nowFn()
+		r.ended[id] = true
+	}
 	delete(r.sessions, id)
-	// RED-phase: stub does not fire OnEnded; tests will catch.
+	r.mu.Unlock()
+
+	if present && !alreadyEnded {
+		_, _, onEnded, _ := r.hookSnapshot()
+		if onEnded != nil {
+			safeInvoke("OnEnded", func() { onEnded(s, EndedExplicit, reason) })
+		}
+	}
 }
 
 // MarkEnded keeps the entry but flips State to `ended` and stamps
@@ -161,11 +240,21 @@ func (r *Registry) RemoveWithReason(id, reason string) {
 // session lifetime).
 func (r *Registry) MarkEnded(id string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if s, ok := r.sessions[id]; ok {
+	s, present := r.sessions[id]
+	alreadyEnded := r.ended[id]
+	if present && !alreadyEnded {
 		s.State = StateEnded
+		s.EndedAt = nowFn()
+		r.ended[id] = true
 	}
-	// RED-phase: stub does not stamp EndedAt or fire OnEnded.
+	r.mu.Unlock()
+
+	if present && !alreadyEnded {
+		_, _, onEnded, _ := r.hookSnapshot()
+		if onEnded != nil {
+			safeInvoke("OnEnded", func() { onEnded(s, EndedImplicit, "") })
+		}
+	}
 }
 
 // Get returns a snapshot copy of the named session. Returning by value
@@ -180,4 +269,24 @@ func (r *Registry) Get(id string) (Session, bool) {
 		return Session{}, false
 	}
 	return *s, true
+}
+
+// Snapshot returns a copy of every currently-registered session whose
+// State is not ended. Used by the multiplex's LiveSessions for
+// session_resume emission on coordinator reconnect.
+//
+// The returned slice is fresh; mutating it does not affect the registry.
+// The underlying *Session pointers are snapshotted to value-types so
+// callers do not race with future mutation.
+func (r *Registry) Snapshot() []Session {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		if s.State == StateEnded {
+			continue
+		}
+		out = append(out, *s)
+	}
+	return out
 }
