@@ -2,7 +2,10 @@ module github.com/TheTechChild/pi-remote-daemon
 
 go 1.25
 
-require github.com/stretchr/testify v1.10.0
+require (
+	github.com/coder/websocket v1.8.14
+	github.com/stretchr/testify v1.10.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
