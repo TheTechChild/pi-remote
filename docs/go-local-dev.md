@@ -162,3 +162,12 @@ go build ./... && \
 If that exits clean, your branch will survive CI's `coordinator / build`
 or `daemon / build` job — modulo the Dockerfile case, which only matters
 when you've touched build inputs.
+
+## See also
+
+- [`go-dependencies.md`](go-dependencies.md) — how to add, upgrade,
+  and pin direct dependencies for the Go workspaces (the *what to
+  install* companion to this *how to validate* doc)
+- [`package-management.md`](package-management.md) — JavaScript-side
+  package-management doc
+- [AGENTS.md](../AGENTS.md) — top-level pointer at all three docs

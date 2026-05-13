@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/TheTechChild/pi-remote-daemon/internal/config"
+	"github.com/TheTechChild/pi-remote-daemon/internal/coordinator"
 	"github.com/TheTechChild/pi-remote-daemon/internal/session"
 	"github.com/TheTechChild/pi-remote-daemon/internal/socket"
 )
@@ -23,9 +24,28 @@ import (
 // Version is set at build time via -ldflags; default value is for local builds.
 var Version = "0.0.0-dev"
 
+// flagOverrides bundles the dev-affordance CLI flags. Per #48 these are
+// a stop-gap until the real TOML loader lands; they let `go run` work
+// against a local coordinator without populating /etc/pi-remote/.
+// When the loader lands these become the top of the
+// flag > env > file > defaults precedence chain.
+type flagOverrides struct {
+	coordinatorURL  string
+	machineID       string
+	tokenIDFile     string
+	tokenSecretFile string
+}
+
 func main() {
-	var cfgPath string
+	var (
+		cfgPath string
+		ovr     flagOverrides
+	)
 	flag.StringVar(&cfgPath, "config", "", "path to daemon.toml; empty = search default locations")
+	flag.StringVar(&ovr.coordinatorURL, "coordinator-url", "", "override coordinator WebSocket URL (e.g. ws://localhost:8080/v1/daemon); dev affordance, see #48")
+	flag.StringVar(&ovr.machineID, "machine-id", "", "override machine_id; dev affordance, see #48")
+	flag.StringVar(&ovr.tokenIDFile, "service-token-id-file", "", "override path to the CF service-token ID file; dev affordance, see #48")
+	flag.StringVar(&ovr.tokenSecretFile, "service-token-secret-file", "", "override path to the CF service-token secret file; dev affordance, see #48")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -38,6 +58,7 @@ func main() {
 		slog.Error("config load failed", "err", err)
 		os.Exit(1)
 	}
+	applyFlagOverrides(cfg, ovr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -45,6 +66,24 @@ func main() {
 	if err := run(ctx, cfg, logger); err != nil {
 		slog.Error("daemon exited with error", "err", err)
 		os.Exit(1)
+	}
+}
+
+// applyFlagOverrides mutates cfg in place with any non-empty flag
+// values. Empty flag = no override = keep what the loader returned.
+// Public only for the integration test (same _test package).
+func applyFlagOverrides(cfg *config.Config, ovr flagOverrides) {
+	if ovr.coordinatorURL != "" {
+		cfg.Coordinator.URL = ovr.coordinatorURL
+	}
+	if ovr.machineID != "" {
+		cfg.MachineID = ovr.machineID
+	}
+	if ovr.tokenIDFile != "" {
+		cfg.Coordinator.ServiceTokenIDFile = ovr.tokenIDFile
+	}
+	if ovr.tokenSecretFile != "" {
+		cfg.Coordinator.ServiceTokenSecretFile = ovr.tokenSecretFile
 	}
 }
 
@@ -75,6 +114,49 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	acceptDone := make(chan struct{})
 	go acceptLoop(ln, handler, conns, &wg, log, acceptDone)
 
+	// Wire the coordinator client + session multiplex if the daemon is
+	// configured to talk to a coordinator. The bootstrap is
+	// circular-free thanks to lazy late-binding: the multiplex needs a
+	// Coord, the client needs a LiveSnapshot. We construct the client
+	// first with a placeholder LiveSnapshot, then construct the
+	// multiplex over the client, then patch the placeholder to point at
+	// the multiplex's real LiveSessions method.
+	coordCtx, coordCancel := context.WithCancel(context.Background())
+	defer coordCancel()
+	var coordDone chan struct{}
+	if cfg.Coordinator.URL != "" {
+		var mux *session.Multiplex
+		coordCfg := coordinator.Config{
+			URL:        cfg.Coordinator.URL,
+			IDFile:     cfg.Coordinator.ServiceTokenIDFile,
+			SecretFile: cfg.Coordinator.ServiceTokenSecretFile,
+			MachineRegister: coordinator.MachineRegisterInput{
+				MachineID:          cfg.MachineID,
+				MachineDisplayName: cfg.MachineDisplayName,
+				DaemonVersion:      Version,
+			},
+			LiveSnapshot: func() []session.LiveSession {
+				if mux == nil {
+					return nil
+				}
+				return mux.LiveSessions()
+			},
+			Clock:  coordinator.RealClock(),
+			Logger: log,
+		}
+		client := coordinator.NewClient(coordCfg)
+		frames := coordinator.FrameBuilder{MachineID: cfg.MachineID}
+		mux = session.NewMultiplex(registry, client, frames, cfg.MachineID, nil)
+		coordDone = make(chan struct{})
+		go func() {
+			defer close(coordDone)
+			_ = client.Run(coordCtx)
+		}()
+		log.Info("coordinator client started", "url", cfg.Coordinator.URL)
+	} else {
+		log.Info("coordinator URL not configured; skipping client startup")
+	}
+
 	<-ctx.Done()
 	log.Info("shutdown signal received, closing listener")
 
@@ -87,6 +169,14 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// extension that has nothing more to say.
 	conns.closeAll()
 	wg.Wait()
+
+	// Stop the coordinator client (if started) and wait for it to
+	// finish so its goroutine doesn't leak past process exit.
+	coordCancel()
+	if coordDone != nil {
+		<-coordDone
+	}
+
 	log.Info("daemon stopped")
 	return nil
 }
