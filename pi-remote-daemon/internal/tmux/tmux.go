@@ -338,6 +338,23 @@ func (c *Client) readLoop(ctx context.Context) {
 	defer func() {
 		c.log.Info("tmux CC read loop stopped")
 		c.handleExitNotification()
+
+		c.mu.Lock()
+		if c.stdin != nil {
+			_ = c.stdin.Close()
+		}
+		for _, ch := range c.pendingCmds {
+			select {
+			case ch <- cmdResult{err: fmt.Errorf("tmux control process exited")}:
+			default:
+			}
+		}
+		c.pendingCmds = make(map[string]chan cmdResult)
+		c.mu.Unlock()
+
+		if c.cmd != nil {
+			_ = c.cmd.Wait()
+		}
 	}()
 
 	scanner := bufio.NewScanner(c.stdout)
