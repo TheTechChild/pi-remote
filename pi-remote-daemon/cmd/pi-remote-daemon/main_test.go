@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +38,10 @@ func discardLogger() *slog.Logger {
 // daemon wireup: listener up, ext-side dial, register handshake, then
 // graceful shutdown via context cancel.
 func TestRun_AcceptsRegisterAndShutsDownOnContextCancel(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not found on system PATH; skipping full integration smoke test")
+	}
+
 	dir := shortTempDir(t)
 	cfg := &config.Config{
 		Socket: config.SocketConfig{Path: filepath.Join(dir, "daemon.sock")},

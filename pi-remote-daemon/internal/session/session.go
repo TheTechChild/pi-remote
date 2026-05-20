@@ -17,6 +17,8 @@ const (
 	StateEnded        SessionState = "ended"
 )
 
+const ReasonTmuxServerLost = "tmux_server_lost"
+
 // Session is the daemon-side join of one tmux pane, one Pi process, and one
 // extension instance. Field set is per SPEC.md § 7.5 with one M3+M4
 // addition:

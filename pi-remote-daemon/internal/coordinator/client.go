@@ -3,6 +3,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	pb "github.com/TheTechChild/pi-remote-daemon/internal/proto/daemon-coordinator"
 	"github.com/TheTechChild/pi-remote-daemon/internal/session"
 )
 
@@ -28,6 +30,11 @@ const (
 	backoffMax     = 60 * time.Second
 )
 
+// Spawner defines the interface to trigger a new Pi/tmux session.
+type Spawner interface {
+	Spawn(ctx context.Context, cwd string, requestID string)
+}
+
 // Config bundles the inputs to NewClient. URL, IDFile, SecretFile come
 // from config.toml; MachineRegister is built from machine-level config
 // at startup; LiveSnapshot is the multiplex's LiveSessions method;
@@ -39,6 +46,7 @@ type Config struct {
 	SecretFile      string
 	MachineRegister MachineRegisterInput
 	LiveSnapshot    func() []session.LiveSession
+	Spawner         Spawner
 	Clock           Clock
 	Logger          *slog.Logger
 }
@@ -203,8 +211,24 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 		ftype, _ := frame["type"].(string)
 		c.log.Debug("coordinator frame received",
 			slog.String("type", ftype))
-		// M3+M4 scope: no inbound frames are acted on. spawn_request,
-		// pty_input, abort_session are M5/M6.
+
+		if ftype == "spawn_request" {
+			payloadBytes, err := json.Marshal(frame)
+			if err != nil {
+				c.log.Error("failed to marshal spawn_request frame", slog.String("err", err.Error()))
+				continue
+			}
+			var req pb.SpawnRequestJson
+			if err := json.Unmarshal(payloadBytes, &req); err != nil {
+				c.log.Error("failed to unmarshal spawn_request", slog.String("err", err.Error()))
+				continue
+			}
+			if c.cfg.Spawner != nil {
+				go c.cfg.Spawner.Spawn(ctx, req.Cwd, req.RequestId)
+			} else {
+				c.log.Warn("spawner not configured, ignoring spawn_request")
+			}
+		}
 	}
 }
 

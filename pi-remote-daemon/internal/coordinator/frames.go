@@ -58,12 +58,18 @@ func (b FrameBuilder) SessionEvent(sessionID string, seq uint64, kind string, ts
 // SessionEnded satisfies session.FrameBuilder.SessionEnded. Maps the
 // session-package EndedKind tag to the schema's reason enum:
 // EndedExplicit -> extension_disconnect, EndedImplicit -> process_exit.
-func (b FrameBuilder) SessionEnded(sessionID string, seq uint64, kind session.EndedKind) any {
-	reason := ReasonExtensionDisconnect
-	if kind == session.EndedImplicit {
-		reason = ReasonProcessExit
+func (b FrameBuilder) SessionEnded(sessionID string, seq uint64, kind session.EndedKind, reason string) any {
+	r := ReasonExtensionDisconnect
+	if reason == string(ReasonTmuxServerLost) {
+		r = ReasonTmuxServerLost
+	} else if reason == string(ReasonKilled) {
+		r = ReasonKilled
+	} else if reason == string(ReasonSpawnFailed) {
+		r = ReasonSpawnFailed
+	} else if kind == session.EndedImplicit {
+		r = ReasonProcessExit
 	}
-	return NewSessionEnded(sessionID, seq, reason)
+	return NewSessionEnded(sessionID, seq, r)
 }
 
 // Compile-time guard that FrameBuilder satisfies session.FrameBuilder.
