@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { EVENTS_TABLE, PI_EVENT_NAMES, type PiEventName } from "./events-table.js";
 import { startHeartbeat } from "./heartbeat.js";
-import { projectNameFromCwd } from "./project.js";
+import { resolveProject } from "./project.js";
 import type { Disconnect } from "./proto/extension-daemon/disconnect.js";
 import type { Event } from "./proto/extension-daemon/event.js";
 import { buildRegister, registerWithDaemon } from "./register.js";
@@ -108,11 +108,12 @@ export default function piRemoteExtensionFactory(
 
     socket.on("reconnected", () => {
       // After a daemon restart, re-send the register with the same session_id.
+      const resolvedProj = resolveProject(cwd);
       const payload = buildRegister({
         sessionId,
         cwd,
-        projectName: projectNameFromCwd(cwd),
-        projectDisplayName: null,
+        projectName: resolvedProj.projectName,
+        projectDisplayName: resolvedProj.projectDisplayName,
         tmuxTarget: TMUX_TARGET_PLACEHOLDER,
         pid,
         hostname: host,
@@ -135,11 +136,12 @@ export default function piRemoteExtensionFactory(
       return;
     }
 
+    const resolvedProj = resolveProject(cwd);
     const payload = buildRegister({
       sessionId,
       cwd,
-      projectName: projectNameFromCwd(cwd),
-      projectDisplayName: null,
+      projectName: resolvedProj.projectName,
+      projectDisplayName: resolvedProj.projectDisplayName,
       tmuxTarget: TMUX_TARGET_PLACEHOLDER,
       pid,
       hostname: host,

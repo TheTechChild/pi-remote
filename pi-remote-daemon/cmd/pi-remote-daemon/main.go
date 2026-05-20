@@ -19,6 +19,7 @@ import (
 	"github.com/TheTechChild/pi-remote-daemon/internal/coordinator"
 	"github.com/TheTechChild/pi-remote-daemon/internal/session"
 	"github.com/TheTechChild/pi-remote-daemon/internal/socket"
+	"github.com/TheTechChild/pi-remote-daemon/internal/tmux"
 )
 
 // Version is set at build time via -ldflags; default value is for local builds.
@@ -107,7 +108,13 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	)
 	log.Info("socket listening", "path", ln.Path())
 
-	handler := socket.NewHandler(registry, log)
+	tmuxClient := tmux.NewClient(cfg.Tmux.Binary, cfg.Tmux.SessionPrefix, registry, nil, log)
+	if err := tmuxClient.Start(ctx); err != nil {
+		return fmt.Errorf("start tmux client: %w", err)
+	}
+	defer func() { _ = tmuxClient.Close() }()
+
+	handler := socket.NewHandler(registry, tmuxClient, log)
 	conns := newConnTracker()
 
 	var wg sync.WaitGroup
@@ -141,12 +148,14 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 				}
 				return mux.LiveSessions()
 			},
-			Clock:  coordinator.RealClock(),
-			Logger: log,
+			Spawner: tmuxClient,
+			Clock:   coordinator.RealClock(),
+			Logger:  log,
 		}
 		client := coordinator.NewClient(coordCfg)
 		frames := coordinator.FrameBuilder{MachineID: cfg.MachineID}
 		mux = session.NewMultiplex(registry, client, frames, cfg.MachineID, nil)
+		tmuxClient.SetMultiplex(mux)
 		coordDone = make(chan struct{})
 		go func() {
 			defer close(coordDone)

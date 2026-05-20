@@ -2,6 +2,7 @@
 package session
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"sync"
@@ -49,7 +50,7 @@ type LiveSession struct {
 type FrameBuilder interface {
 	SessionStarted(s Session, machineID, hostnameFallback string) any
 	SessionEvent(sessionID string, seq uint64, kind string, ts time.Time, data map[string]any) any
-	SessionEnded(sessionID string, seq uint64, kind EndedKind) any
+	SessionEnded(sessionID string, seq uint64, kind EndedKind, reason string) any
 }
 
 // extEventFrame is the shape of the extension's `event` JSONL frame.
@@ -196,11 +197,11 @@ func (m *Multiplex) onEvent(sessionID string, eventBytes []byte) {
 // allocator. Per M9 + plan: session_ended consumes a seq even though
 // the schema doesn't strictly require monotonic seq across
 // session-level frames.
-func (m *Multiplex) onEnded(s *Session, kind EndedKind, _ string) {
+func (m *Multiplex) onEnded(s *Session, kind EndedKind, reason string) {
 	seq := m.allocFor(s.SessionID).Next()
 	defer m.dropAlloc(s.SessionID)
 
-	frame := m.frames.SessionEnded(s.SessionID, seq, kind)
+	frame := m.frames.SessionEnded(s.SessionID, seq, kind, reason)
 	if !m.coord.Connected() {
 		return
 	}
@@ -210,6 +211,31 @@ func (m *Multiplex) onEnded(s *Session, kind EndedKind, _ string) {
 			slog.Uint64("seq", seq),
 			slog.String("err", err.Error()))
 	}
+}
+
+// SendPty assigns a sequence number, base64 encodes the terminal data, and sends the session_pty frame.
+func (m *Multiplex) SendPty(sessionID string, rawBytes []byte) error {
+	seq := m.allocFor(sessionID).Next()
+	frame := map[string]any{
+		"type":       "session_pty",
+		"v":          1,
+		"session_id": sessionID,
+		"seq":        int(seq),
+		"bytes":      base64.StdEncoding.EncodeToString(rawBytes),
+		"ts":         int(m.now().UnixMilli()),
+	}
+	if !m.coord.Connected() {
+		return nil
+	}
+	return m.coord.Send(frame)
+}
+
+// SendPtyOrFrame sends any arbitrary coordinator frame upstream.
+func (m *Multiplex) SendPtyOrFrame(frame any) error {
+	if !m.coord.Connected() {
+		return nil
+	}
+	return m.coord.Send(frame)
 }
 
 // LiveSessions returns a snapshot of every session in non-ended state

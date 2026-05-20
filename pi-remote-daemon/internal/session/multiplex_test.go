@@ -136,17 +136,19 @@ func (stubFrames) SessionEvent(sessionID string, seq uint64, kind string, ts tim
 	}
 }
 
-func (stubFrames) SessionEnded(sessionID string, seq uint64, kind session.EndedKind) any {
-	reason := "extension_disconnect"
-	if kind == session.EndedImplicit {
-		reason = "process_exit"
+func (stubFrames) SessionEnded(sessionID string, seq uint64, kind session.EndedKind, reason string) any {
+	r := "extension_disconnect"
+	if reason == "tmux_server_lost" || reason == "killed" || reason == "spawn_failed" {
+		r = reason
+	} else if kind == session.EndedImplicit {
+		r = "process_exit"
 	}
 	return map[string]any{
 		"type":       "session_ended",
 		"v":          1,
 		"session_id": sessionID,
 		"seq":        seq,
-		"reason":     reason,
+		"reason":     r,
 	}
 }
 

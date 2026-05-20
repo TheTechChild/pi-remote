@@ -88,6 +88,17 @@ public final class TerminalSession extends TerminalOutput {
         this.mClient = client;
     }
 
+    public TerminalSession(Integer transcriptRows, TerminalSessionClient client) {
+        this.mShellPath = null;
+        this.mCwd = null;
+        this.mArgs = null;
+        this.mEnv = null;
+        this.mTranscriptRows = transcriptRows;
+        this.mClient = client;
+        this.mShellPid = 1; // Mark active to allow writes through mTerminalToProcessIOQueue checks
+    }
+
+
     /**
      * @param client The {@link TerminalSessionClient} interface implementation to allow
      *               for communication between {@link TerminalSession} and its client.
@@ -99,15 +110,31 @@ public final class TerminalSession extends TerminalOutput {
             mEmulator.updateTerminalSessionClient(client);
     }
 
+    public interface SessionResizeListener {
+        void onResize(int columns, int rows);
+    }
+
+    private SessionResizeListener mResizeListener;
+
+    public void setResizeListener(SessionResizeListener listener) {
+        this.mResizeListener = listener;
+    }
+
     /** Inform the attached pty of the new size and reflow or initialize the emulator. */
     public void updateSize(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         if (mEmulator == null) {
             initializeEmulator(columns, rows, cellWidthPixels, cellHeightPixels);
         } else {
-            JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
+            if (mShellPath != null) {
+                JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
+            }
             mEmulator.resize(columns, rows, cellWidthPixels, cellHeightPixels);
         }
+        if (mResizeListener != null) {
+            mResizeListener.onResize(columns, rows);
+        }
     }
+
 
     /** The terminal title as set through escape sequences or null if none set. */
     public String getTitle() {
@@ -123,10 +150,15 @@ public final class TerminalSession extends TerminalOutput {
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mClient);
 
+        if (mShellPath == null) {
+            return;
+        }
+
         int[] processId = new int[1];
         mTerminalFileDescriptor = JNI.createSubprocess(mShellPath, mCwd, mArgs, mEnv, processId, rows, columns, cellWidthPixels, cellHeightPixels);
         mShellPid = processId[0];
         mClient.setTerminalShellPid(this, mShellPid);
+
 
         final FileDescriptor terminalFileDescriptorWrapped = wrapFileDescriptor(mTerminalFileDescriptor, mClient);
 
@@ -173,11 +205,31 @@ public final class TerminalSession extends TerminalOutput {
 
     }
 
+    public interface SessionWriteListener {
+        void onWrite(byte[] data, int offset, int count);
+    }
+
+    private SessionWriteListener mWriteListener;
+
+    public void setWriteListener(SessionWriteListener listener) {
+        this.mWriteListener = listener;
+    }
+
+    public void writeToEmulator(byte[] data, int offset, int count) {
+        mProcessToTerminalIOQueue.write(data, offset, count);
+        mMainThreadHandler.sendEmptyMessage(MSG_NEW_INPUT);
+    }
+
     /** Write data to the shell process. */
     @Override
     public void write(byte[] data, int offset, int count) {
+        if (mWriteListener != null) {
+            mWriteListener.onWrite(data, offset, count);
+            return;
+        }
         if (mShellPid > 0) mTerminalToProcessIOQueue.write(data, offset, count);
     }
+
 
     /** Write the Unicode code point to the terminal encoded in UTF-8. */
     public void writeCodePoint(boolean prependEscape, int codePoint) {

@@ -18,18 +18,24 @@ import (
 // flow through this socket — control messages alone are well under 1MB.
 const maxFrameSize = 1 << 20
 
+// TmuxResolver resolves and maps terminal process details to active tmux targets and panes.
+type TmuxResolver interface {
+	ResolveAndMap(pid int, inputTarget, sessionID, spawnToken string) (resolvedTarget string, paneID string, err error)
+}
+
 // Handler dispatches JSONL frames from a single extension connection into
 // the shared session registry.
 type Handler struct {
 	registry *session.Registry
+	tmux     TmuxResolver
 	log      *slog.Logger
 }
 
-func NewHandler(reg *session.Registry, log *slog.Logger) *Handler {
+func NewHandler(reg *session.Registry, tmux TmuxResolver, log *slog.Logger) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{registry: reg, log: log}
+	return &Handler{registry: reg, tmux: tmux, log: log}
 }
 
 // frameType peeks at just the `type` discriminator without binding the rest
@@ -107,10 +113,21 @@ func (h *Handler) handleRegister(c net.Conn, line []byte) (string, bool) {
 	if reg.SpawnToken != nil {
 		spawnToken = *reg.SpawnToken
 	}
+
+	resolvedTarget := reg.TmuxTarget
+	if h.tmux != nil {
+		target, _, err := h.tmux.ResolveAndMap(reg.Pid, reg.TmuxTarget, reg.SessionId, spawnToken)
+		if err != nil {
+			h.log.Warn("failed to resolve tmux target", slog.Int("pid", reg.Pid), slog.String("err", err.Error()))
+		} else {
+			resolvedTarget = target
+		}
+	}
+
 	s := &session.Session{
 		SessionID:       reg.SessionId,
 		SpawnToken:      spawnToken,
-		TmuxTarget:      reg.TmuxTarget,
+		TmuxTarget:      resolvedTarget,
 		PID:             reg.Pid,
 		CWD:             reg.Cwd,
 		ProjectName:     reg.ProjectName,

@@ -42,7 +42,7 @@ func validRegister(sessionID string, pid int) string {
 func servePipe(t *testing.T, reg *session.Registry) (client net.Conn, done <-chan struct{}) {
 	t.Helper()
 	c1, c2 := net.Pipe()
-	h := socket.NewHandler(reg, discardLogger())
+	h := socket.NewHandler(reg, nil, discardLogger())
 	d := make(chan struct{})
 	go func() {
 		h.Serve(c2)
