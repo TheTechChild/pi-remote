@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/TheTechChild/pi-remote-coordinator/internal/broker"
 	daemon_coordinator "github.com/TheTechChild/pi-remote-coordinator/internal/proto/daemon-coordinator"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
@@ -186,6 +187,22 @@ func (i *Ingestor) handleSessionEvent(b []byte) error {
 	if !advanced {
 		i.log.Debug("session_event stale (no regress)",
 			"session_id", msg.SessionId, "seq", msg.Seq)
+		return nil
+	}
+
+	entry := broker.Entry{
+		Seq:     uint64(msg.Seq),
+		Kind:    broker.EntryKindEvent,
+		Ts:      int64(msg.Ts),
+		Payload: b,
+	}
+	i.sessions.AppendToRing(msg.SessionId, entry)
+
+	if s, ok := i.sessions.Get(msg.SessionId); ok {
+		clients := s.GetAttachedClients()
+		for _, c := range clients {
+			c.Send(b)
+		}
 	}
 	return nil
 }
@@ -199,6 +216,22 @@ func (i *Ingestor) handleSessionPty(b []byte) error {
 	if !advanced {
 		i.log.Debug("session_pty stale (no regress)",
 			"session_id", msg.SessionId, "seq", msg.Seq)
+		return nil
+	}
+
+	entry := broker.Entry{
+		Seq:     uint64(msg.Seq),
+		Kind:    broker.EntryKindPty,
+		Ts:      int64(msg.Ts),
+		Payload: b,
+	}
+	i.sessions.AppendToRing(msg.SessionId, entry)
+
+	if s, ok := i.sessions.Get(msg.SessionId); ok {
+		clients := s.GetAttachedClients()
+		for _, c := range clients {
+			c.Send(b)
+		}
 	}
 	return nil
 }

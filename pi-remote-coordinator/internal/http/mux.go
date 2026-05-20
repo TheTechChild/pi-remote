@@ -42,9 +42,10 @@ func NewMux(deps Deps) *http.ServeMux {
 		log:      deps.Logger,
 	})
 	mux.Handle("/v1/client", &clientWS{
-		auth:    deps.Auth,
-		clients: deps.Clients,
-		log:     deps.Logger,
+		auth:     deps.Auth,
+		clients:  deps.Clients,
+		sessions: deps.Sessions,
+		log:      deps.Logger,
 	})
 	return mux
 }

@@ -5,26 +5,45 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/coder/websocket"
 
 	"github.com/TheTechChild/pi-remote-coordinator/internal/auth"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/clients"
 	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
+var clientConnCount uint64
+
+type attachedClient struct {
+	id       string
+	sendChan chan []byte
+}
+
+func (a *attachedClient) ID() string {
+	return a.id
+}
+
+func (a *attachedClient) Send(msg []byte) {
+	select {
+	case a.sendChan <- msg:
+	default:
+		// Queue full or client slow, drop frame to avoid blocking daemon.
+	}
+}
+
 // clientWS is the /v1/client handler: CF Access JWT cookie auth → WS upgrade
-// → read client_hello → lookup in the clients registry (SPEC.md § 10.3).
-//
-// Workstream C scope: validate the hello, log "client_hello accepted", then
-// keep the conn open just to detect close (no reply frames; no subscriptions;
-// no fan-out). Those land with the broker in Batch 3.
+// → read client_hello → lookup in the clients registry.
 type clientWS struct {
-	auth    auth.Middleware
-	clients *clients.Registry
-	log     *slog.Logger
+	auth     auth.Middleware
+	clients  *clients.Registry
+	sessions *sessions.Registry
+	log      *slog.Logger
 }
 
 func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +54,6 @@ func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO(cf-tunnel): origin check is enforced at the CF tunnel.
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -96,19 +114,128 @@ func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"client_id", hello.ClientId, "app_version", hello.AppVersion,
 		"auth_email", identity.Email)
 
-	// Workstream C: no reply frames, no subscription handling. Read loop
-	// exists only to detect close and (in Batch 3) future client-to-
-	// coordinator frames.
+	// Unique connection ID for fan-out
+	connID := fmt.Sprintf("%s-%d", hello.ClientId, atomic.AddUint64(&clientConnCount, 1))
+
+	// Dedicated serialize-writes channel & loop
+	sendChan := make(chan []byte, 512)
+	writeCtx, writeCancel := context.WithCancel(ctx)
+	defer writeCancel()
+
+	go func() {
+		for {
+			select {
+			case <-writeCtx.Done():
+				return
+			case msg, ok := <-sendChan:
+				if !ok {
+					return
+				}
+				err := c.Write(writeCtx, websocket.MessageText, msg)
+				if err != nil {
+					h.log.Debug("client WS write error", "err", err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	var attachedSession *sessions.Session
+	defer func() {
+		if attachedSession != nil {
+			attachedSession.Detach(connID)
+		}
+	}()
+
+	// Main client read/dispatch loop
 	for {
-		_, _, err := c.Read(ctx)
+		msgType, data, err := c.Read(ctx)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
 				h.log.Debug("client WS read end", "err", err)
 			}
 			return
 		}
-		// Phase-1 forward-compat: log + ignore unknown client frames.
-		// We don't even bother decoding them — the broker work will
-		// route subscribe_machine_list / spawn_session / pty_input.
+		if msgType != websocket.MessageText {
+			h.log.Debug("client WS ignoring non-text frame", "type", msgType)
+			continue
+		}
+
+		var peek struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(data, &peek); err != nil {
+			h.log.Debug("client WS malformed frame", "err", err)
+			continue
+		}
+
+		switch peek.Type {
+		case "attach":
+			var attach coordinator_app.AttachJson
+			if err := json.Unmarshal(data, &attach); err != nil {
+				h.log.Debug("client WS malformed attach", "err", err)
+				continue
+			}
+
+			s, ok := h.sessions.Get(attach.SessionId)
+			if !ok {
+				h.log.Debug("client WS attach: session not found", "session_id", attach.SessionId)
+				continue
+			}
+
+			// Detach from previous session if attached
+			if attachedSession != nil {
+				attachedSession.Detach(connID)
+				attachedSession = nil
+			}
+
+			// Replay history logic
+			entries, okRange, earliest, latest := s.Ring.Replay(uint64(attach.LastSeq))
+			if !okRange {
+				// Dispatch replay_unavailable control frame before switching to live
+				ru := coordinator_app.ReplayUnavailableJson{
+					Type:                 "replay_unavailable",
+					V:                    1,
+					SessionId:            s.SessionID,
+					EarliestAvailableSeq: int(earliest),
+					CurrentSeq:           int(latest),
+				}
+				ruBytes, _ := json.Marshal(ru)
+				select {
+				case sendChan <- ruBytes:
+				default:
+				}
+			} else {
+				// Replay matching history
+				for _, entry := range entries {
+					select {
+					case sendChan <- entry.Payload:
+					default:
+					}
+				}
+			}
+
+			// Attach to receive live frames
+			s.Attach(&attachedClient{id: connID, sendChan: sendChan})
+			attachedSession = s
+			h.log.Info("client attached to session", "client_id", hello.ClientId, "session_id", s.SessionID)
+
+		case "detach":
+			var detach coordinator_app.DetachJson
+			if err := json.Unmarshal(data, &detach); err != nil {
+				h.log.Debug("client WS malformed detach", "err", err)
+				continue
+			}
+
+			if attachedSession != nil && attachedSession.SessionID == detach.SessionId {
+				attachedSession.Detach(connID)
+				attachedSession = nil
+				h.log.Info("client detached from session", "client_id", hello.ClientId, "session_id", detach.SessionId)
+			}
+
+		default:
+			h.log.Info("client WS unknown frame type (ignored)", "type", peek.Type)
+		}
 	}
 }

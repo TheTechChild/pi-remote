@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: MIT
 
 // Package sessions holds the coordinator-side registry of live Pi sessions.
-// This phase implements only the in-memory bookkeeping needed by the daemon
-// and client WebSocket handlers (SPEC.md § 8.4). The per-session ring
-// buffer (Session.Ring) and broker fan-out (Session.AttachedClients) are
-// added in Batch 3 (M3/M4).
 package sessions
 
 import (
+	"sync"
 	"time"
 
+	"github.com/TheTechChild/pi-remote-coordinator/internal/broker"
 	daemon_coordinator "github.com/TheTechChild/pi-remote-coordinator/internal/proto/daemon-coordinator"
 )
 
+// ClientConn is an interface for fanning out session frames to attached clients.
+type ClientConn interface {
+	ID() string
+	Send(msg []byte)
+}
+
 // Session is the coordinator's view of one Pi process running on a daemon.
-// See SPEC.md § 8.4. Workstream C scope: no Ring, no AttachedClients — those
-// land with the broker in M3/M4.
 type Session struct {
+	mu          sync.RWMutex
 	SessionID   string
 	MachineID   string
 	Metadata    daemon_coordinator.SessionStartedJsonMetadata
@@ -25,4 +28,39 @@ type Session struct {
 	Ended       bool
 	EndedAt     time.Time
 	LastTouched time.Time
+
+	Ring            *broker.RingBuffer
+	AttachedClients map[string]ClientConn
+}
+
+// Attach registers a client connection to receive live frames.
+func (s *Session) Attach(conn ClientConn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.AttachedClients == nil {
+		s.AttachedClients = make(map[string]ClientConn)
+	}
+	s.AttachedClients[conn.ID()] = conn
+	s.LastTouched = time.Now()
+}
+
+// Detach unregisters a client connection from receiving live frames.
+func (s *Session) Detach(connID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.AttachedClients != nil {
+		delete(s.AttachedClients, connID)
+	}
+	s.LastTouched = time.Now()
+}
+
+// GetAttachedClients returns a slice of all currently fanned-out clients.
+func (s *Session) GetAttachedClients() []ClientConn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	res := make([]ClientConn, 0, len(s.AttachedClients))
+	for _, client := range s.AttachedClients {
+		res = append(res, client)
+	}
+	return res
 }
