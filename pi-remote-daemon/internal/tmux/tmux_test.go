@@ -64,3 +64,19 @@ func TestDeescapeTmux(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_WritePty_NotStarted(t *testing.T) {
+	c := tmux.NewClient("tmux", "pi-test-", nil, nil, nil)
+	err := c.WritePty("session-1", []byte("hello"))
+	if err == nil {
+		t.Fatal("expected error since client is not started")
+	}
+}
+
+func TestClient_ResizePty_NotStarted(t *testing.T) {
+	c := tmux.NewClient("tmux", "pi-test-", nil, nil, nil)
+	err := c.ResizePty("session-1", 80, 24)
+	if err == nil {
+		t.Fatal("expected error since client is not started")
+	}
+}

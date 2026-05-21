@@ -3,6 +3,7 @@ package tmux
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -29,10 +30,11 @@ type Client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	stderr *bytes.Buffer
 
-	mu          sync.Mutex
-	pendingCmds map[string]chan cmdResult
-	nextCmdID   uint64
+	mu           sync.Mutex
+	pendingCmds  map[string]chan cmdResult
+	pendingQueue []chan cmdResult
 
 	// paneToSession maps a tmux pane ID (like "%0") to active SessionID.
 	paneToSession map[string]string
@@ -76,16 +78,15 @@ func (c *Client) SetMultiplex(mux *session.Multiplex) {
 
 // Start launches or attaches to the tmux control-mode session and runs the read/write loops.
 func (c *Client) Start(ctx context.Context) error {
-	// Check if session exists
-	err := exec.Command(c.binary, "has-session", "-t", "pi-remote-control").Run()
-	var cmd *exec.Cmd
-	if err != nil {
-		c.log.Info("creating new tmux control session", slog.String("session", "pi-remote-control"))
-		cmd = exec.Command(c.binary, "-CC", "new-session", "-d", "-s", "pi-remote-control")
-	} else {
-		c.log.Info("attaching to existing tmux control session", slog.String("session", "pi-remote-control"))
-		cmd = exec.Command(c.binary, "-CC", "attach", "-t", "pi-remote-control")
+	// Always kill any existing control session to start with a fresh, clean slate
+	_ = exec.Command(c.binary, "kill-session", "-t", "pi-remote-control").Run()
+
+	c.log.Info("creating new tmux control session", slog.String("session", "pi-remote-control"))
+	// Create a detached session first to avoid requiring a controlling terminal (TTY/PTY)
+	if createErr := exec.Command(c.binary, "new-session", "-d", "-s", "pi-remote-control").Run(); createErr != nil {
+		return fmt.Errorf("failed to create new tmux session: %w", createErr)
 	}
+	cmd := exec.Command(c.binary, "-C", "attach", "-t", "pi-remote-control")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -96,6 +97,9 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start tmux CC: %w", err)
 	}
@@ -103,6 +107,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.cmd = cmd
 	c.stdin = stdin
 	c.stdout = stdout
+	c.stderr = &stderrBuf
 
 	// Start read/parse loop
 	go c.readLoop(ctx)
@@ -125,21 +130,26 @@ func (c *Client) Close() error {
 
 // RunCommand issues a command to tmux CC and blocks waiting for its response.
 func (c *Client) RunCommand(cmdStr string) ([]string, error) {
-	c.mu.Lock()
-	c.nextCmdID++
-	id := fmt.Sprintf("cmd%d", c.nextCmdID)
 	ch := make(chan cmdResult, 1)
-	c.pendingCmds[id] = ch
+
+	c.mu.Lock()
+	if c.stdin == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("tmux client not started or closed")
+	}
+	c.pendingQueue = append(c.pendingQueue, ch)
 	c.mu.Unlock()
 
-	defer func() {
+	c.log.Debug("issuing tmux command", slog.String("cmd", cmdStr))
+	if _, err := fmt.Fprintf(c.stdin, "%s\n", cmdStr); err != nil {
 		c.mu.Lock()
-		delete(c.pendingCmds, id)
+		for i, q := range c.pendingQueue {
+			if q == ch {
+				c.pendingQueue = append(c.pendingQueue[:i], c.pendingQueue[i+1:]...)
+				break
+			}
+		}
 		c.mu.Unlock()
-	}()
-
-	c.log.Debug("issuing tmux command", slog.String("id", id), slog.String("cmd", cmdStr))
-	if _, err := fmt.Fprintf(c.stdin, "%s %s\n", id, cmdStr); err != nil {
 		return nil, fmt.Errorf("write command: %w", err)
 	}
 
@@ -147,6 +157,20 @@ func (c *Client) RunCommand(cmdStr string) ([]string, error) {
 	case res := <-ch:
 		return res.output, res.err
 	case <-time.After(10 * time.Second):
+		c.mu.Lock()
+		for i, q := range c.pendingQueue {
+			if q == ch {
+				c.pendingQueue = append(c.pendingQueue[:i], c.pendingQueue[i+1:]...)
+				break
+			}
+		}
+		for k, v := range c.pendingCmds {
+			if v == ch {
+				delete(c.pendingCmds, k)
+				break
+			}
+		}
+		c.mu.Unlock()
 		return nil, fmt.Errorf("timeout waiting for command response")
 	}
 }
@@ -266,8 +290,40 @@ func (c *Client) ResolveAndMap(pid int, inputTarget, sessionID, spawnToken strin
 	return resolvedTarget, paneID, nil
 }
 
-// MapPane queries tmux for the pane_id of a target and saves it in the mapping.
+// MapPane queries tmux for the pane_id of a target, links its window to the control session, and saves it in the mapping.
 func (c *Client) MapPane(target, sessionID string) (string, error) {
+	// 1. Lazy cleanup of dead sessions in paneToSession
+	c.mu.Lock()
+	var deadPanes []struct {
+		pID string
+		sID string
+	}
+	for pID, sID := range c.paneToSession {
+		if _, ok := c.reg.Get(sID); !ok {
+			deadPanes = append(deadPanes, struct{ pID, sID string }{pID, sID})
+		}
+	}
+	c.mu.Unlock()
+
+	for _, dp := range deadPanes {
+		c.log.Info("cleaning up dead tmux pane mapping", slog.String("pane_id", dp.pID), slog.String("session_id", dp.sID))
+		// Query the window_id for the dead pane
+		wOut, wErr := c.RunCommand(fmt.Sprintf("display-message -p -t %s \"#{window_id}\"", dp.pID))
+		if wErr == nil && len(wOut) > 0 && strings.TrimSpace(wOut[0]) != "" {
+			wID := strings.TrimSpace(wOut[0])
+			// First try to unlink (if it is still linked to other sessions)
+			_, uErr := c.RunCommand(fmt.Sprintf("unlink-window -t pi-remote-control:%s", wID))
+			if uErr != nil {
+				// If it is only linked to pi-remote-control, unlink fails, so kill it
+				_, _ = c.RunCommand(fmt.Sprintf("kill-window -t pi-remote-control:%s", wID))
+			}
+		}
+		c.mu.Lock()
+		delete(c.paneToSession, dp.pID)
+		c.mu.Unlock()
+	}
+
+	// 2. Resolve the paneID for the new target
 	out, err := c.RunCommand(fmt.Sprintf("display-message -p -t %q \"#{pane_id}\"", target))
 	if err != nil {
 		return "", err
@@ -282,6 +338,81 @@ func (c *Client) MapPane(target, sessionID string) (string, error) {
 	c.mu.Unlock()
 
 	c.log.Debug("mapped tmux target to pane ID", slog.String("target", target), slog.String("pane_id", paneID), slog.String("session_id", sessionID))
+
+	// 3. Link the window containing this pane into the control session if not already linked
+	wOut, wErr := c.RunCommand(fmt.Sprintf("display-message -p -t %s \"#{window_id}\"", paneID))
+	if wErr != nil || len(wOut) == 0 || strings.TrimSpace(wOut[0]) == "" {
+		return paneID, nil
+	}
+	windowID := strings.TrimSpace(wOut[0])
+
+	// Check if already linked
+	linkedWindows, lwErr := c.RunCommand("list-windows -t pi-remote-control -F \"#{window_id}\"")
+	alreadyLinked := false
+	if lwErr == nil {
+		for _, lw := range linkedWindows {
+			if strings.TrimSpace(lw) == windowID {
+				alreadyLinked = true
+				break
+			}
+		}
+	}
+
+	if !alreadyLinked {
+		c.log.Info("linking window into tmux control session to receive %output stream", slog.String("window_id", windowID), slog.String("pane_id", paneID), slog.String("session_id", sessionID))
+		_, linkErr := c.RunCommand(fmt.Sprintf("link-window -d -s %s -t pi-remote-control", paneID))
+		if linkErr != nil {
+			c.log.Warn("failed to link window into control session", slog.String("pane_id", paneID), slog.String("err", linkErr.Error()))
+		}
+	}
+
+	// 4. Capture current pane contents and cursor position to initialize the client's screen state
+	if c.multiplex != nil {
+		go func() {
+			// Wait a small moment to let tmux stabilize the link/creation
+			time.Sleep(50 * time.Millisecond)
+
+			c.log.Info("capturing initial screen state for pane", slog.String("pane_id", paneID), slog.String("session_id", sessionID))
+			capOut, capErr := c.RunCommand(fmt.Sprintf("capture-pane -e -p -t %s", paneID))
+			if capErr != nil {
+				c.log.Warn("failed to capture initial pane state", slog.String("pane_id", paneID), slog.String("err", capErr.Error()))
+				return
+			}
+
+			// Query cursor position
+			curOut, curErr := c.RunCommand(fmt.Sprintf("display-message -p -t %s \"#{cursor_x} #{cursor_y}\"", paneID))
+			var cursorX, cursorY int
+			if curErr == nil && len(curOut) > 0 {
+				parts := strings.Fields(curOut[0])
+				if len(parts) == 2 {
+					_, _ = fmt.Sscanf(parts[0], "%d", &cursorX)
+					_, _ = fmt.Sscanf(parts[1], "%d", &cursorY)
+				}
+			}
+
+			// Construct initial payload: clear screen + home cursor + captured text (joined by \r\n) + move cursor to active position
+			var buf bytes.Buffer
+			buf.WriteString("\x1b[2J\x1b[H") // Clear screen and move to home
+
+			// Join lines with \r\n to prevent staircase rendering
+			for i, line := range capOut {
+				buf.WriteString(line)
+				if i < len(capOut)-1 {
+					buf.WriteString("\r\n")
+				}
+			}
+
+			// Move cursor to active position (ANSI is 1-based, tmux cursor coordinates are 0-based)
+			fmt.Fprintf(&buf, "\x1b[%d;%dH", cursorY+1, cursorX+1)
+
+			if err := c.multiplex.SendPty(sessionID, buf.Bytes()); err != nil {
+				c.log.Error("failed to send initial captured pty frame", slog.String("session_id", sessionID), slog.String("err", err.Error()))
+			} else {
+				c.log.Info("successfully sent initial captured screen state", slog.String("session_id", sessionID), slog.Int("bytes_len", buf.Len()))
+			}
+		}()
+	}
+
 	return paneID, nil
 }
 
@@ -354,6 +485,9 @@ func (c *Client) readLoop(ctx context.Context) {
 
 		if c.cmd != nil {
 			_ = c.cmd.Wait()
+			if c.stderr != nil && c.stderr.Len() > 0 {
+				c.log.Error("tmux stderr output on exit", slog.String("stderr", strings.TrimSpace(c.stderr.String())))
+			}
 		}
 	}()
 
@@ -388,14 +522,33 @@ func (c *Client) readLoop(ctx context.Context) {
 					activeCmdID = parts[2]
 					activeCmdOutput = nil
 					activeCmdIsError = false
+
+					c.mu.Lock()
+					if len(c.pendingQueue) > 0 {
+						ch := c.pendingQueue[0]
+						c.pendingQueue = c.pendingQueue[1:]
+						c.pendingCmds[activeCmdID] = ch
+					}
+					c.mu.Unlock()
 				}
 				continue
 
 			case "%error":
 				if len(parts) >= 3 {
-					activeCmdID = parts[2]
-					activeCmdOutput = nil
-					activeCmdIsError = true
+					cmdID := parts[2]
+					if cmdID == activeCmdID {
+						activeCmdIsError = true
+						c.mu.Lock()
+						ch, ok := c.pendingCmds[cmdID]
+						c.mu.Unlock()
+
+						if ok {
+							err := fmt.Errorf("%s", strings.Join(activeCmdOutput, "\n"))
+							ch <- cmdResult{output: activeCmdOutput, err: err}
+						}
+						activeCmdID = ""
+						activeCmdOutput = nil
+					}
 				}
 				continue
 
@@ -447,6 +600,8 @@ func (c *Client) handleOutputNotification(paneID, dataEsc string) {
 	if len(rawBytes) == 0 {
 		return
 	}
+
+	c.log.Info("handleOutputNotification forwarding PTY", slog.String("pane", paneID), slog.String("session_id", sessionID), slog.Int("bytes_len", len(rawBytes)))
 
 	// Forward raw terminal bytes to multiplexer
 	if err := c.multiplex.SendPty(sessionID, rawBytes); err != nil {
@@ -541,4 +696,75 @@ func generateSpawnToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// WritePty sends keystrokes/data to the specified session's tmux pane.
+func (c *Client) WritePty(sessionID string, data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	c.mu.Lock()
+	if c.stdin == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("tmux client not started or closed")
+	}
+	var target string
+	for p, sID := range c.paneToSession {
+		if sID == sessionID {
+			target = p
+			break
+		}
+	}
+	c.mu.Unlock()
+
+	if target == "" {
+		sess, ok := c.reg.Get(sessionID)
+		if !ok {
+			return fmt.Errorf("session not found: %s", sessionID)
+		}
+		target = sess.TmuxTarget
+	}
+
+	hexStrings := make([]string, len(data))
+	for i, b := range data {
+		hexStrings[i] = fmt.Sprintf("%02x", b)
+	}
+
+	cmdStr := fmt.Sprintf("send-keys -t %q -H %s", target, strings.Join(hexStrings, " "))
+	_, err := c.RunCommand(cmdStr)
+	return err
+}
+
+// ResizePty resizes the tmux pane for the specified session.
+func (c *Client) ResizePty(sessionID string, cols, rows int) error {
+	if cols < 1 || rows < 1 {
+		return fmt.Errorf("invalid dimensions: cols=%d, rows=%d", cols, rows)
+	}
+
+	c.mu.Lock()
+	if c.stdin == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("tmux client not started or closed")
+	}
+	var target string
+	for p, sID := range c.paneToSession {
+		if sID == sessionID {
+			target = p
+			break
+		}
+	}
+	c.mu.Unlock()
+
+	if target == "" {
+		sess, ok := c.reg.Get(sessionID)
+		if !ok {
+			return fmt.Errorf("session not found: %s", sessionID)
+		}
+		target = sess.TmuxTarget
+	}
+
+	cmdStr := fmt.Sprintf("resize-window -t %q -x %d -y %d", target, cols, rows)
+	_, err := c.RunCommand(cmdStr)
+	return err
 }

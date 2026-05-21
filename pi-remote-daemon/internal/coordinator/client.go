@@ -3,6 +3,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,9 +31,11 @@ const (
 	backoffMax     = 60 * time.Second
 )
 
-// Spawner defines the interface to trigger a new Pi/tmux session.
+// Spawner defines the interface to trigger a new Pi/tmux session and handle PTY events.
 type Spawner interface {
 	Spawn(ctx context.Context, cwd string, requestID string)
+	WritePty(sessionID string, data []byte) error
+	ResizePty(sessionID string, cols, rows int) error
 }
 
 // Config bundles the inputs to NewClient. URL, IDFile, SecretFile come
@@ -227,6 +230,47 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				go c.cfg.Spawner.Spawn(ctx, req.Cwd, req.RequestId)
 			} else {
 				c.log.Warn("spawner not configured, ignoring spawn_request")
+			}
+		} else if ftype == "pty_input" {
+			payloadBytes, err := json.Marshal(frame)
+			if err != nil {
+				c.log.Error("failed to marshal pty_input frame", slog.String("err", err.Error()))
+				continue
+			}
+			var req pb.PtyInputJson
+			if err := json.Unmarshal(payloadBytes, &req); err != nil {
+				c.log.Error("failed to unmarshal pty_input", slog.String("err", err.Error()))
+				continue
+			}
+			if c.cfg.Spawner != nil {
+				decoded, err := base64.StdEncoding.DecodeString(req.Bytes)
+				if err != nil {
+					c.log.Error("failed to decode base64 pty input bytes", slog.String("err", err.Error()))
+					continue
+				}
+				if err := c.cfg.Spawner.WritePty(req.SessionId, decoded); err != nil {
+					c.log.Error("failed to write pty input", slog.String("session_id", req.SessionId), slog.String("err", err.Error()))
+				}
+			} else {
+				c.log.Warn("spawner not configured, ignoring pty_input")
+			}
+		} else if ftype == "pty_resize" {
+			payloadBytes, err := json.Marshal(frame)
+			if err != nil {
+				c.log.Error("failed to marshal pty_resize frame", slog.String("err", err.Error()))
+				continue
+			}
+			var req pb.PtyResizeJson
+			if err := json.Unmarshal(payloadBytes, &req); err != nil {
+				c.log.Error("failed to unmarshal pty_resize", slog.String("err", err.Error()))
+				continue
+			}
+			if c.cfg.Spawner != nil {
+				if err := c.cfg.Spawner.ResizePty(req.SessionId, req.Cols, req.Rows); err != nil {
+					c.log.Error("failed to resize pty", slog.String("session_id", req.SessionId), slog.String("err", err.Error()))
+				}
+			} else {
+				c.log.Warn("spawner not configured, ignoring pty_resize")
 			}
 		}
 	}
