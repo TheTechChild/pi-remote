@@ -254,7 +254,7 @@ class WebSocketClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            clientScope.launch {
+            clientScope.launch(Dispatchers.Default.limitedParallelism(1)) {
                 try {
                     val root = json.parseToJsonElement(text).jsonObject
                     val type = root["type"]?.jsonPrimitive?.content ?: return@launch

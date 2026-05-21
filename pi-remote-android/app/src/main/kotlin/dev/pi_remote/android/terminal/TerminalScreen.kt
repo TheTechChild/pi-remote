@@ -121,26 +121,44 @@ fun TerminalScreen(
 
         termSession = session
 
-        // Attach session to coordinator websocket to receive historical stream + live frames
-        webSocketClient.attach(sessionId)
-        webSocketClient.sendClientFocus(sessionId, true)
-
         // Stream base64-encoded bytes in from WebSocketClient PTY flow
         val job = coroutineScope.launch(Dispatchers.IO) {
+            var nextExpectedSeq: Long? = null
+            val pendingPackets = mutableMapOf<Long, dev.pi_remote.android.proto.SessionPty>()
+
             webSocketClient.sessionPty.collect { pty ->
                 if (pty.sessionId == sessionId) {
                     try {
-                        Log.d("pi-remote/terminal", "Received PTY update: seq=${pty.seq}, base64Length=${pty.bytes.length}")
-                        val decodedBytes = Base64.decode(pty.bytes, Base64.DEFAULT)
-                        Log.d("pi-remote/terminal", "Decoded PTY update to ${decodedBytes.size} bytes: ${String(decodedBytes)}")
-                        session.writeToEmulator(decodedBytes, 0, decodedBytes.size)
-                        Log.d("pi-remote/terminal", "Successfully injected ${decodedBytes.size} bytes into emulator")
+                        val seq = pty.seq
+                        Log.d("pi-remote/terminal", "Received PTY update: seq=$seq, base64Length=${pty.bytes.length}")
+
+                        if (nextExpectedSeq == null || seq < nextExpectedSeq!!) {
+                            nextExpectedSeq = seq
+                        }
+
+                        if (seq >= nextExpectedSeq!!) {
+                            pendingPackets[seq] = pty
+
+                            while (pendingPackets.containsKey(nextExpectedSeq)) {
+                                val currentPty = pendingPackets.remove(nextExpectedSeq)!!
+                                val decodedBytes = Base64.decode(currentPty.bytes, Base64.DEFAULT)
+                                Log.d("pi-remote/terminal", "Injecting ordered PTY update for seq=$nextExpectedSeq, size=${decodedBytes.size}")
+                                session.writeToEmulator(decodedBytes, 0, decodedBytes.size)
+                                nextExpectedSeq = nextExpectedSeq!! + 1
+                            }
+                        } else {
+                            Log.w("pi-remote/terminal", "Discarding old or duplicate packet: seq=$seq, expected=$nextExpectedSeq")
+                        }
                     } catch (e: Exception) {
                         Log.e("pi-remote/terminal", "Failed to decode/inject PTY payload for seq=${pty.seq}", e)
                     }
                 }
             }
         }
+
+        // Attach session to coordinator websocket to receive historical stream + live frames
+        webSocketClient.attach(sessionId)
+        webSocketClient.sendClientFocus(sessionId, true)
 
         onDispose {
             job.cancel()
@@ -205,7 +223,10 @@ fun TerminalScreen(
                                     override fun onScale(scale: Float): Float {
                                         return scale
                                     }
-                                    override fun onSingleTapUp(e: MotionEvent) {}
+                                    override fun onSingleTapUp(e: MotionEvent) {
+                                        val imm = ctx.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                                        imm?.showSoftInput(this@apply, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                                    }
                                     override fun shouldBackButtonBeMappedToEscape(): Boolean = true
                                     override fun shouldEnforceCharBasedInput(): Boolean = false
                                     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
