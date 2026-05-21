@@ -24,7 +24,10 @@ enum class ConnectionStatus {
 }
 
 class WebSocketClient(
-    private val json: Json = Json { ignoreUnknownKeys = true }
+    private val json: Json = Json { 
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
 ) {
     private val clientScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -68,10 +71,11 @@ class WebSocketClient(
         writeJob = clientScope.launch {
             for (message in writeChannel) {
                 var sent = false
-                while (!sent && activeSocket() != null) {
+                while (!sent) {
                     val socket = webSocket
-                    if (socket != null) {
+                    if (socket != null && _connectionStatus.value == ConnectionStatus.CONNECTED) {
                         try {
+                            Log.i(TAG, "Actually sending WebSocket message: $message")
                             sent = socket.send(message)
                             if (!sent) {
                                 Log.w(TAG, "Socket send returned false, waiting...")
@@ -82,7 +86,7 @@ class WebSocketClient(
                             delay(100)
                         }
                     } else {
-                        delay(100)
+                        delay(200)
                     }
                 }
             }
@@ -103,27 +107,55 @@ class WebSocketClient(
     }
 
     @Synchronized private fun establishConnection() {
-        val url = currentUrl ?: return
+        var url = currentUrl ?: return
         if (_connectionStatus.value == ConnectionStatus.CONNECTED || _connectionStatus.value == ConnectionStatus.CONNECTING) {
             return
         }
 
+        // Normalize URL if it lacks a protocol scheme
+        var trimmed = url.trim()
+        if (trimmed.isNotEmpty() && !trimmed.contains("://")) {
+            trimmed = "ws://$trimmed"
+        }
+
+        // Ensure path ends with /v1/client if no path was provided or /v1/client is missing
+        if (trimmed.isNotEmpty()) {
+            try {
+                val uri = java.net.URI(trimmed)
+                val path = uri.path
+                if (path == null || path.isEmpty() || path == "/") {
+                    trimmed = trimmed.removeSuffix("/") + "/v1/client"
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse URI for path normalization: $trimmed", e)
+            }
+        }
+        url = trimmed
+        currentUrl = url
+
         _connectionStatus.value = ConnectionStatus.CONNECTING
         Log.i(TAG, "Connecting to $url")
 
-        val clientBuilder = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS) // infinite read timeout for WebSocket
+        try {
+            val clientBuilder = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.MILLISECONDS) // infinite read timeout for WebSocket
 
-        okHttpClient = clientBuilder.build()
+            okHttpClient = clientBuilder.build()
 
-        val requestBuilder = Request.Builder().url(url)
-        currentJwt?.let {
-            requestBuilder.addHeader("Cookie", "CF_Authorization=$it")
+            val requestBuilder = Request.Builder().url(url)
+            currentJwt?.let {
+                requestBuilder.addHeader("Cookie", "CF_Authorization=$it")
+            }
+
+            val request = requestBuilder.build()
+            webSocket = okHttpClient?.newWebSocket(request, SocketListener())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initiate WebSocket connection to $url", e)
+            _connectionStatus.value = ConnectionStatus.FAILED
+            okHttpClient = null
+            webSocket = null
         }
-
-        val request = requestBuilder.build()
-        webSocket = okHttpClient?.newWebSocket(request, SocketListener())
     }
 
     fun disconnect() {
@@ -155,8 +187,10 @@ class WebSocketClient(
     }
 
     private fun sendMessage(msg: String) {
-        clientScope.launch {
-            writeChannel.send(msg)
+        Log.i(TAG, "Queuing outbound message: $msg")
+        val result = writeChannel.trySend(msg)
+        if (result.isFailure) {
+            Log.e(TAG, "Failed to queue message: $result")
         }
     }
 
@@ -215,7 +249,7 @@ class WebSocketClient(
             _connectionStatus.value = ConnectionStatus.CONNECTED
             resetReconnectDelay()
             // Auto-send registration once connected in Batch-5 mode
-            sendClientHello("android-client-dev")
+            sendClientHello("test-client-1")
             subscribeMachineList()
         }
 
@@ -233,6 +267,7 @@ class WebSocketClient(
                         }
                         "session_pty" -> {
                             val msg = json.decodeFromString(SessionPty.serializer(), text)
+                            Log.i(TAG, "Received session_pty message for sessionId=${msg.sessionId}, seq=${msg.seq}, base64Length=${msg.bytes.length}")
                             _sessionPty.emit(msg)
                         }
                         "spawn_response" -> {

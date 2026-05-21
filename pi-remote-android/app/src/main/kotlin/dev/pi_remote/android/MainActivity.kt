@@ -44,10 +44,15 @@ class MainActivity : ComponentActivity() {
         sharedPreferences = getSharedPreferences("pi_remote_prefs", Context.MODE_PRIVATE)
 
         // Load saved connection details and auto-connect if a URL is stored
-        val savedUrl = sharedPreferences.getString("coordinator_url", "") ?: ""
+        var savedUrl = sharedPreferences.getString("coordinator_url", "") ?: ""
         val savedJwt = sharedPreferences.getString("mock_jwt", "") ?: ""
 
         if (savedUrl.isNotEmpty()) {
+            val trimmed = savedUrl.trim()
+            if (!trimmed.contains("://")) {
+                savedUrl = "ws://$trimmed"
+                sharedPreferences.edit().putString("coordinator_url", savedUrl).apply()
+            }
             webSocketClient.connect(savedUrl, savedJwt.ifEmpty { null })
         }
 
@@ -126,14 +131,20 @@ fun AppNavigation(
                 currentJwt = jwt,
                 connectionStatus = connectionStatus,
                 onSaveAndConnect = { newUrl, newJwt ->
-                    url = newUrl
+                    val trimmed = newUrl.trim()
+                    val normalizedUrl = if (trimmed.isNotEmpty() && !trimmed.contains("://")) {
+                        "ws://$trimmed"
+                    } else {
+                        trimmed
+                    }
+                    url = normalizedUrl
                     jwt = newJwt
                     sharedPreferences.edit()
-                        .putString("coordinator_url", newUrl)
+                        .putString("coordinator_url", normalizedUrl)
                         .putString("mock_jwt", newJwt)
                         .apply()
                     webSocketClient.disconnect()
-                    webSocketClient.connect(newUrl, newJwt.ifEmpty { null })
+                    webSocketClient.connect(normalizedUrl, newJwt.ifEmpty { null })
                     currentScreen = Screen.SESSION_LIST
                 },
                 onDisconnect = {

@@ -37,6 +37,7 @@ import dev.pi_remote.android.sessions.TextPrimary
 import dev.pi_remote.android.sessions.TextSecondary
 import dev.pi_remote.android.sessions.IceBlue
 import dev.pi_remote.android.sessions.MutedGray
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -59,6 +60,18 @@ fun TerminalScreen(
     // Reference to standard Termux TerminalSession
     var termSession by remember { mutableStateOf<TerminalSession?>(null) }
     var termViewRef by remember { mutableStateOf<TerminalView?>(null) }
+
+    // Statically calculate ideal, legible terminal font size based on device density and screen width
+    val fontSizePx = remember {
+        val displayMetrics = context.resources.displayMetrics
+        val density = displayMetrics.density
+        val widthDp = displayMetrics.widthPixels / density
+        // We want the font size to scale nicely with the screen width.
+        // For a standard 411dp phone, 411 * 0.038 = 15.6dp (which becomes ~47px).
+        // Clamped between 13dp and 20dp for perfect readability across foldables, tablets, and small phones.
+        val calculatedFontSizeDp = (widthDp * 0.038f).coerceIn(13f, 20f)
+        (calculatedFontSizeDp * density).toInt()
+    }
 
     // Initialize session and wire listeners
     DisposableEffect(sessionId) {
@@ -113,14 +126,17 @@ fun TerminalScreen(
         webSocketClient.sendClientFocus(sessionId, true)
 
         // Stream base64-encoded bytes in from WebSocketClient PTY flow
-        val job = coroutineScope.launch {
-            webSocketClient.sessionPty.collectLatest { pty ->
+        val job = coroutineScope.launch(Dispatchers.IO) {
+            webSocketClient.sessionPty.collect { pty ->
                 if (pty.sessionId == sessionId) {
                     try {
+                        Log.d("pi-remote/terminal", "Received PTY update: seq=${pty.seq}, base64Length=${pty.bytes.length}")
                         val decodedBytes = Base64.decode(pty.bytes, Base64.DEFAULT)
+                        Log.d("pi-remote/terminal", "Decoded PTY update to ${decodedBytes.size} bytes: ${String(decodedBytes)}")
                         session.writeToEmulator(decodedBytes, 0, decodedBytes.size)
+                        Log.d("pi-remote/terminal", "Successfully injected ${decodedBytes.size} bytes into emulator")
                     } catch (e: Exception) {
-                        Log.e("pi-remote/terminal", "Failed to decode/inject PTY payload", e)
+                        Log.e("pi-remote/terminal", "Failed to decode/inject PTY payload for seq=${pty.seq}", e)
                     }
                 }
             }
@@ -186,7 +202,9 @@ fun TerminalScreen(
                         factory = { ctx ->
                             TerminalView(ctx, null).apply {
                                 val viewClient = object : TerminalViewClient {
-                                    override fun onScale(scale: Float): Float { return scale }
+                                    override fun onScale(scale: Float): Float {
+                                        return scale
+                                    }
                                     override fun onSingleTapUp(e: MotionEvent) {}
                                     override fun shouldBackButtonBeMappedToEscape(): Boolean = true
                                     override fun shouldEnforceCharBasedInput(): Boolean = false
@@ -219,13 +237,16 @@ fun TerminalScreen(
                                     override fun logStackTrace(tag: String, ex: Exception) { Log.e(tag, "Stack trace", ex) }
                                 }
                                 setTerminalViewClient(viewClient)
+                                setTextSize(fontSizePx)
                                 attachSession(currentSession)
                                 termViewRef = this
+                                isFocusable = true
+                                isFocusableInTouchMode = true
                                 requestFocus()
                             }
                         },
                         update = { view ->
-                            // Update binding if needed
+                            view.setTextSize(fontSizePx)
                         },
                         modifier = Modifier.fillMaxSize()
                     )
