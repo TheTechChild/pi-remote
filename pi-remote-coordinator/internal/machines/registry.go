@@ -92,3 +92,15 @@ func (r *Registry) UnregisterByConn(machineID string, conn Conn) {
 		delete(r.m, machineID)
 	}
 }
+
+// List returns a snapshot of all registered machines.
+func (r *Registry) List() []*Machine {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make([]*Machine, 0, len(r.m))
+	for _, m := range r.m {
+		snap := *m
+		res = append(res, &snap)
+	}
+	return res
+}

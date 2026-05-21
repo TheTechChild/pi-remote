@@ -18,6 +18,7 @@ import (
 type Conn interface {
 	Close(code websocket.StatusCode, reason string) error
 	Context() context.Context
+	Write(ctx context.Context, typ websocket.MessageType, b []byte) error
 }
 
 // Machine is the coordinator's view of one connected daemon. See

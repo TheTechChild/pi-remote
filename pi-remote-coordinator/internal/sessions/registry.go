@@ -175,3 +175,14 @@ func (r *Registry) AppendToRing(sessionID string, entry broker.Entry) {
 	items := r.LRUItems()
 	broker.BalanceGlobalLRU(items, sessionID, 50*1024*1024, 1*1024*1024)
 }
+
+// List returns a snapshot of all registered sessions.
+func (r *Registry) List() []*Session {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make([]*Session, 0, len(r.m))
+	for _, s := range r.m {
+		res = append(res, s)
+	}
+	return res
+}
