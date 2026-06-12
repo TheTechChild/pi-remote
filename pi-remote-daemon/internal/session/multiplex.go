@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/TheTechChild/pi-remote-daemon/internal/ptymux"
 )
 
 // Coord is the contract the multiplex requires from the coordinator
@@ -81,8 +83,9 @@ type Multiplex struct {
 	machineID string
 	now       func() time.Time
 
-	mu   sync.Mutex
-	seqs map[string]*SeqAllocator
+	mu         sync.Mutex
+	seqs       map[string]*SeqAllocator
+	sanitizers map[string]*ptymux.Sanitizer
 
 	// pidAlive probes process existence for LiveSessions (issue #16);
 	// defaultPidAlive in production, injectable in tests.
@@ -99,17 +102,19 @@ func NewMultiplex(reg *Registry, coord Coord, frames FrameBuilder, machineID str
 		now = time.Now
 	}
 	m := &Multiplex{
-		reg:       reg,
-		coord:     coord,
-		frames:    frames,
-		machineID: machineID,
-		now:       now,
-		seqs:      make(map[string]*SeqAllocator),
-		pidAlive:  defaultPidAlive,
+		reg:        reg,
+		coord:      coord,
+		frames:     frames,
+		machineID:  machineID,
+		now:        now,
+		seqs:       make(map[string]*SeqAllocator),
+		sanitizers: make(map[string]*ptymux.Sanitizer),
+		pidAlive:   defaultPidAlive,
 	}
 	reg.OnRegister(m.onRegister)
 	reg.OnEvent(m.onEvent)
 	reg.OnEnded(m.onEnded)
+	reg.OnStateChange(m.onStateChange)
 	// OnHeartbeat intentionally NOT wired: heartbeats are ext-side only,
 	// the coordinator infers liveness from frame cadence + WebSocket
 	// ping. M3 in plan and #11 acceptance.
@@ -220,8 +225,41 @@ func (m *Multiplex) onEnded(s *Session, kind EndedKind, reason string) {
 	}
 }
 
+// onStateChange forwards daemon-detected state transitions (today:
+// unresponsive flips + recovery, issue #42) as session_state_change
+// frames so the coordinator can update clients and fire pushes.
+func (m *Multiplex) onStateChange(id string, from, to SessionState) {
+	seq := m.allocFor(id).Next()
+	frame := map[string]any{
+		"type":       "session_state_change",
+		"v":          1,
+		"session_id": id,
+		"seq":        seq,
+		"ts":         m.now().UnixMilli(),
+		"from":       string(from),
+		"to":         string(to),
+	}
+	if !m.coord.Connected() {
+		return
+	}
+	if err := m.coord.Send(frame); err != nil {
+		slog.Debug("multiplex: session_state_change send failed",
+			slog.String("session_id", id), slog.String("err", err.Error()))
+	}
+}
+
 // SendPty assigns a sequence number, base64 encodes the terminal data, and sends the session_pty frame.
+// Outbound bytes pass the D8 title-spoof sanitizer first (issue #17).
 func (m *Multiplex) SendPty(sessionID string, rawBytes []byte) error {
+	m.mu.Lock()
+	san, ok := m.sanitizers[sessionID]
+	if !ok {
+		san = &ptymux.Sanitizer{}
+		m.sanitizers[sessionID] = san
+	}
+	m.mu.Unlock()
+	rawBytes = san.Sanitize(rawBytes)
+
 	seq := m.allocFor(sessionID).Next()
 	frame := map[string]any{
 		"type":       "session_pty",

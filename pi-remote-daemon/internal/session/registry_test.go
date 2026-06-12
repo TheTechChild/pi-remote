@@ -150,3 +150,70 @@ func TestRegistry_Concurrent_RaceSafe(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Issue #42: heartbeat-timeout sweep flips silent sessions to
+// unresponsive exactly once; a fresh heartbeat recovers them.
+func TestRegistry_SweepHeartbeats(t *testing.T) {
+	reg := session.NewRegistry()
+	var transitions []string
+	reg.OnStateChange(func(id string, from, to session.SessionState) {
+		transitions = append(transitions, id+":"+string(from)+"->"+string(to))
+	})
+
+	if !mustRegister(t, reg, newSession("sess-1", 1)) {
+		t.Fatal("register failed")
+	}
+	base := time.Now()
+	if err := reg.UpdateHeartbeat("sess-1", base); err != nil {
+		t.Fatal(err)
+	}
+
+	// Within the window: no flip.
+	if got := reg.SweepHeartbeats(base.Add(20*time.Second), 30*time.Second); len(got) != 0 {
+		t.Fatalf("early sweep flipped %v", got)
+	}
+
+	// Past the window: flips once, idempotent on the second sweep.
+	if got := reg.SweepHeartbeats(base.Add(31*time.Second), 30*time.Second); len(got) != 1 || got[0] != "sess-1" {
+		t.Fatalf("sweep = %v, want [sess-1]", got)
+	}
+	if got := reg.SweepHeartbeats(base.Add(40*time.Second), 30*time.Second); len(got) != 0 {
+		t.Fatalf("second sweep not idempotent: %v", got)
+	}
+	if len(transitions) != 1 || transitions[0] != "sess-1:running->unresponsive" {
+		t.Fatalf("transitions = %v", transitions)
+	}
+
+	// Recovery: a heartbeat flips it back and announces it.
+	if err := reg.UpdateHeartbeat("sess-1", base.Add(45*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(transitions) != 2 || transitions[1] != "sess-1:unresponsive->running" {
+		t.Fatalf("recovery transitions = %v", transitions)
+	}
+}
+
+// Issue #43: the reaper drops only sufficiently-old ended entries.
+func TestRegistry_ReapEnded(t *testing.T) {
+	reg := session.NewRegistry()
+	for _, id := range []string{"sess-old", "sess-new", "sess-live"} {
+		if !mustRegister(t, reg, newSession(id, 1)) {
+			t.Fatal("register failed")
+		}
+	}
+	reg.MarkEnded("sess-old")
+	reg.MarkEnded("sess-new")
+
+	if n := reg.ReapEnded(time.Now().Add(30*time.Minute), time.Hour); n != 0 {
+		t.Fatalf("early reap removed %d", n)
+	}
+	if n := reg.ReapEnded(time.Now().Add(2*time.Hour), time.Hour); n != 2 {
+		t.Fatalf("reap removed %d, want 2", n)
+	}
+	if _, ok := reg.Get("sess-live"); !ok {
+		t.Fatal("live session reaped")
+	}
+	if _, ok := reg.Get("sess-old"); ok {
+		t.Fatal("ended session should be reaped")
+	}
+}
