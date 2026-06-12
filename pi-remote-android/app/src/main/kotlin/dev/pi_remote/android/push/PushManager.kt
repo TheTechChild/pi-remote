@@ -71,10 +71,10 @@ object PushManager {
 
     /**
      * Device X25519 keypair: generated once with crypto_box_keypair,
-     * persisted base64 in app-private prefs (matches the existing JWT
-     * storage; Keystore-backed encrypted prefs are a hardening follow-up).
+     * persisted base64 in Keystore-backed encrypted prefs (SecureStore).
      */
-    private fun ensureKeypair(p: SharedPreferences): Pair<ByteArray, ByteArray> {
+    private fun ensureKeypair(context: Context): Pair<ByteArray, ByteArray> {
+        val p = SecureStore.prefs(context)
         val pubB64 = p.getString(KEY_DEVICE_PUB, null)
         val secB64 = p.getString(KEY_DEVICE_SEC, null)
         if (pubB64 != null && secB64 != null) {
@@ -117,7 +117,7 @@ object PushManager {
 
     private fun authedRequest(context: Context, url: String): Request.Builder {
         val b = Request.Builder().url(url)
-        prefs(context).getString("mock_jwt", null)?.takeIf { it.isNotEmpty() }?.let {
+        SecureStore.prefs(context).getString("mock_jwt", null)?.takeIf { it.isNotEmpty() }?.let {
             b.addHeader("Cookie", "CF_Authorization=$it")
         }
         return b
@@ -136,7 +136,7 @@ object PushManager {
             onResult?.invoke(false)
             return
         }
-        val (pub, _) = ensureKeypair(prefs(context))
+        val (pub, _) = ensureKeypair(context)
 
         val body = buildString {
             append("{\"device_display_name\":")
@@ -198,12 +198,11 @@ object PushManager {
             Log.w(TAG, "push message too short: ${wire.size} bytes")
             return null
         }
-        val p = prefs(context)
-        val coordPubB64 = p.getString(KEY_COORD_PUB, null) ?: run {
+        val coordPubB64 = prefs(context).getString(KEY_COORD_PUB, null) ?: run {
             Log.w(TAG, "push received before coordinator registration; dropping")
             return null
         }
-        val (_, sec) = ensureKeypair(p)
+        val (_, sec) = ensureKeypair(context)
         val coordPub = Base64.decode(coordPubB64, Base64.NO_WRAP)
 
         val nonce = wire.copyOfRange(0, Box.NONCEBYTES)

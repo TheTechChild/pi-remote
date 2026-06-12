@@ -59,17 +59,20 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.browser:browser:1.8.0")
-    implementation("androidx.security:security-crypto:1.1.0-beta01") {
-        // security-crypto:1.1.0-beta01 declares both the legacy `tink-android`
-        // and the consolidated `tink` artifact; their class-spaces overlap.
-        // Keep only `tink` (1.16.0) so the APK has one copy of each class.
-        exclude(group = "com.google.crypto.tink", module = "tink-android")
-    }
+    // tink class-space dedupe: security-crypto needs `tink-android` (the
+    // only artifact with integration.android.AndroidKeysetManager) while
+    // the UnifiedPush connector pulls core `tink`; their classes overlap.
+    // Converge on tink-android — it is the Android superset of core tink —
+    // pinned to the connector's expected version line.
+    implementation("androidx.security:security-crypto:1.1.0-beta01")
+    implementation("com.google.crypto.tink:tink-android:1.16.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.unifiedpush.android:connector:3.0.4")
+    implementation("org.unifiedpush.android:connector:3.0.4") {
+        exclude(group = "com.google.crypto.tink", module = "tink")
+    }
     implementation("com.goterl:lazysodium-android:5.1.0@aar")
     implementation("net.java.dev.jna:jna:5.13.0@aar")
 
