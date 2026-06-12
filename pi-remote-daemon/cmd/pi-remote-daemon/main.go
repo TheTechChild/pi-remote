@@ -19,6 +19,7 @@ import (
 	"github.com/TheTechChild/pi-remote-daemon/internal/coordinator"
 	"github.com/TheTechChild/pi-remote-daemon/internal/session"
 	"github.com/TheTechChild/pi-remote-daemon/internal/socket"
+	"github.com/TheTechChild/pi-remote-daemon/internal/suspend"
 	"github.com/TheTechChild/pi-remote-daemon/internal/tmux"
 )
 
@@ -172,6 +173,16 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 			_ = client.Run(coordCtx)
 		}()
 		log.Info("coordinator client started", "url", cfg.Coordinator.URL)
+
+		// Suspend/resume detection (SPEC § 7.7): emit machine_suspending +
+		// close the WebSocket inside the OS pre-sleep grace window; the
+		// reconnect loop re-announces sessions (with machine_resumed) on
+		// wake. No-op watcher on unsupported platforms.
+		go func() {
+			if err := suspend.New().Watch(coordCtx, client.NotifySuspend, client.NotifyResume); err != nil {
+				log.Warn("suspend watcher exited", "err", err)
+			}
+		}()
 	} else {
 		log.Info("coordinator URL not configured; skipping client startup")
 	}

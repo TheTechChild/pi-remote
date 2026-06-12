@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -75,6 +76,37 @@ type Client struct {
 	// the run goroutine without needing the mutex (only one reader).
 	connMu sync.Mutex
 	conn   *websocket.Conn
+
+	// resumePending is set by NotifySuspend; the next successful
+	// handshake emits machine_resumed and clears it (SPEC § 7.7).
+	resumePending atomic.Bool
+}
+
+// NotifySuspend implements the daemon side of SPEC § 7.7: best-effort
+// send machine_suspending, close the WebSocket gracefully, and arrange
+// for machine_resumed to follow the next reconnect handshake. Called
+// from the suspend watcher inside the OS pre-sleep grace window.
+func (c *Client) NotifySuspend() {
+	c.resumePending.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.write(ctx, map[string]any{"type": "machine_suspending", "v": 1}); err != nil {
+		c.log.Warn("machine_suspending send failed", slog.String("err", err.Error()))
+	}
+	c.connMu.Lock()
+	conn := c.conn
+	c.connMu.Unlock()
+	if conn != nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "machine suspending")
+	}
+	c.log.Info("machine_suspending sent; websocket closed for sleep")
+}
+
+// NotifyResume logs the wake transition. The reconnect loop re-dials on
+// its own (any in-flight backoff timer fires shortly after wake), and
+// the handshake appends machine_resumed because resumePending is set.
+func (c *Client) NotifyResume() {
+	c.log.Info("system resumed; awaiting reconnect")
 }
 
 // NewClient constructs but does not start the client. Call Run on a
@@ -195,6 +227,11 @@ func (c *Client) handshake(ctx context.Context) error {
 		resume := NewSessionResume(ls.Session, c.cfg.MachineRegister.MachineID, "", ls.LastSeq)
 		if err := c.write(ctx, resume); err != nil {
 			return fmt.Errorf("session_resume %s: %w", ls.Session.SessionID, err)
+		}
+	}
+	if c.resumePending.Swap(false) {
+		if err := c.write(ctx, map[string]any{"type": "machine_resumed", "v": 1}); err != nil {
+			return fmt.Errorf("machine_resumed: %w", err)
 		}
 	}
 	return nil
