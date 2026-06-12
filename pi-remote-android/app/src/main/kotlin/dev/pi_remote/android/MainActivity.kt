@@ -26,6 +26,8 @@ import androidx.compose.ui.Modifier
 import dev.pi_remote.android.net.ConnectionStatus
 import dev.pi_remote.android.net.WebSocketClient
 import dev.pi_remote.android.proto.SessionInfo
+import android.net.Uri
+import androidx.browser.customtabs.CustomTabsIntent
 import dev.pi_remote.android.push.Notifications
 import dev.pi_remote.android.push.PushManager
 import org.unifiedpush.android.connector.UnifiedPush
@@ -77,6 +79,7 @@ class MainActivity : ComponentActivity() {
         webSocketClient.clientId = PushManager.clientId(this) ?: "test-client-1"
 
         deepLinkSessionId.value = sessionIdFromIntent(intent)
+        jwtFromIntent(intent)?.let { onCfJwtReceived(it) }
 
         // Load saved connection details and auto-connect if a URL is stored
         var savedUrl = sharedPreferences.getString("coordinator_url", "") ?: ""
@@ -105,7 +108,8 @@ class MainActivity : ComponentActivity() {
                         deepLinkSessionId = deepLinkSessionId,
                         onSavePushPrefs = { toggles ->
                             PushManager.postPreferences(this, toggles)
-                        }
+                        },
+                        onCfSignIn = { launchCfSignIn() }
                     )
                 }
             }
@@ -115,12 +119,43 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         sessionIdFromIntent(intent)?.let { deepLinkSessionId.value = it }
+        jwtFromIntent(intent)?.let { onCfJwtReceived(it) }
     }
 
     private fun sessionIdFromIntent(intent: Intent?): String? {
         val data = intent?.data ?: return null
         if (data.scheme != "pi-remote" || data.host != "session") return null
         return data.lastPathSegment
+    }
+
+    /** pi-remote://auth/callback?jwt=... — the CF Access reflection (D5). */
+    private fun jwtFromIntent(intent: Intent?): String? {
+        val data = intent?.data ?: return null
+        if (data.scheme != "pi-remote" || data.host != "auth") return null
+        return data.getQueryParameter("jwt")
+    }
+
+    /** Store the real CF Access JWT, reconnect, and retry registration. */
+    private fun onCfJwtReceived(jwt: String) {
+        sharedPreferences.edit().putString("mock_jwt", jwt).apply()
+        val url = sharedPreferences.getString("coordinator_url", "") ?: ""
+        if (url.isNotEmpty()) {
+            webSocketClient.disconnect()
+            webSocketClient.connect(url, jwt)
+        }
+        PushManager.registerWithCoordinator(this)
+    }
+
+    /** Launch the CF Access email-PIN flow in a Custom Tab (SPEC § D5). */
+    private fun launchCfSignIn() {
+        val ws = sharedPreferences.getString("coordinator_url", "")?.trim().orEmpty()
+        if (ws.isEmpty()) return
+        val httpBase = ws
+            .replaceFirst("wss://", "https://")
+            .replaceFirst("ws://", "http://")
+            .removeSuffix("/")
+        CustomTabsIntent.Builder().build()
+            .launchUrl(this, Uri.parse("$httpBase/v1/auth/app-callback"))
     }
 
     override fun onDestroy() {
@@ -136,7 +171,8 @@ fun AppNavigation(
     initialUrl: String,
     initialJwt: String,
     deepLinkSessionId: MutableState<String?> = mutableStateOf(null),
-    onSavePushPrefs: (Map<String, Boolean>) -> Unit = {}
+    onSavePushPrefs: (Map<String, Boolean>) -> Unit = {},
+    onCfSignIn: () -> Unit = {}
 ) {
     var currentScreen by remember { mutableStateOf(Screen.SESSION_LIST) }
     var activeSession by remember { mutableStateOf<SessionInfo?>(null) }
@@ -195,6 +231,7 @@ fun AppNavigation(
                 currentJwt = jwt,
                 connectionStatus = connectionStatus,
                 onSavePushPrefs = onSavePushPrefs,
+                onCfSignIn = onCfSignIn,
                 onSaveAndConnect = { newUrl, newJwt ->
                     val trimmed = newUrl.trim()
                     val normalizedUrl = if (trimmed.isNotEmpty() && !trimmed.contains("://")) {

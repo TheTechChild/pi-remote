@@ -82,6 +82,7 @@ func NewMux(deps Deps) *http.ServeMux {
 			log:     deps.Logger,
 		})
 	}
+	mux.Handle("GET /v1/auth/app-callback", &authCallback{auth: deps.Auth, log: deps.Logger})
 	mux.Handle("POST /v1/clients/{client_id}/preferences", &clientsPreferences{
 		auth:    deps.Auth,
 		clients: deps.Clients,

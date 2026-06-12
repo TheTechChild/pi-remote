@@ -39,6 +39,10 @@ type ServerConfig struct {
 type CloudflareConfig struct {
 	AccessAud            string `toml:"access_aud"`
 	ServiceTokenAudience string `toml:"service_token_audience"`
+	// TeamDomain is the Cloudflare Access team domain (e.g.
+	// "yourteam.cloudflareaccess.com"); the JWKS used to verify Access
+	// JWTs is fetched from <team_domain>/cdn-cgi/access/certs.
+	TeamDomain string `toml:"team_domain"`
 }
 
 type NtfyConfig struct {
@@ -132,6 +136,7 @@ func applyEnv(cfg *Config, getenv func(string) string) error {
 		"PI_REMOTE_LISTEN":                   &cfg.Server.Listen,
 		"PI_REMOTE_ACCESS_AUD":               &cfg.Cloudflare.AccessAud,
 		"PI_REMOTE_SERVICE_TOKEN_AUDIENCE":   &cfg.Cloudflare.ServiceTokenAudience,
+		"PI_REMOTE_CF_TEAM_DOMAIN":           &cfg.Cloudflare.TeamDomain,
 		"PI_REMOTE_NTFY_URL":                 &cfg.Ntfy.URL,
 		"PI_REMOTE_NTFY_AUTH_TOKEN":          &cfg.Ntfy.AuthToken,
 		"PI_REMOTE_COORDINATOR_KEYPAIR_PATH": &cfg.Push.CoordinatorKeypairPath,
@@ -189,6 +194,9 @@ func ValidateCFAccess(cfg *Config) error {
 	}
 	if cfg.Cloudflare.ServiceTokenAudience == "" {
 		errs = append(errs, errors.New("cloudflare.service_token_audience required for -auth=cfaccess"))
+	}
+	if cfg.Cloudflare.TeamDomain == "" {
+		errs = append(errs, errors.New("cloudflare.team_domain required for -auth=cfaccess"))
 	}
 	return errors.Join(errs...)
 }

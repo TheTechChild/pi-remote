@@ -501,6 +501,7 @@ listen = ":8080"
 [cloudflare]
 access_aud = "..."                    # CF Access AUD tag for client auth
 service_token_audience = "..."        # for daemon auth
+team_domain = "yourteam.cloudflareaccess.com"  # JWKS source: <team_domain>/cdn-cgi/access/certs
 
 [ntfy]
 url = "http://ntfy:80"                # internal Docker network name
@@ -523,6 +524,7 @@ coordinator_keypair_path = "/data/coordinator-keypair.box"  # generated on first
 | `PI_REMOTE_LISTEN` | `server.listen` |
 | `PI_REMOTE_ACCESS_AUD` | `cloudflare.access_aud` |
 | `PI_REMOTE_SERVICE_TOKEN_AUDIENCE` | `cloudflare.service_token_audience` |
+| `PI_REMOTE_CF_TEAM_DOMAIN` | `cloudflare.team_domain` |
 | `PI_REMOTE_NTFY_URL` | `ntfy.url` |
 | `PI_REMOTE_NTFY_AUTH_TOKEN` | `ntfy.auth_token` |
 | `PI_REMOTE_TOTAL_CACHE_BYTES` | `broker.total_cache_bytes` |
@@ -1170,6 +1172,7 @@ Revocation: remove the user's email from the CF Access policy. Existing JWTs con
 | `WSS /v1/daemon` | Service token | Daemon connection |
 | `WSS /v1/client` | Email-PIN JWT | Client connection |
 | `POST /v1/clients/register` | Email-PIN JWT | Initial client registration |
+| `GET /v1/auth/app-callback` | Email-PIN JWT | Reflects the validated CF JWT into the `pi-remote://auth/callback` deep link (D5) |
 | `GET /v1/health` | None | Health check (returns 200 if server running) |
 
 `POST /v1/clients/register` body:
@@ -1609,7 +1612,7 @@ These were called out as deferred during the design discussion and are now decid
 | D2 | Termux library distribution | Vendored. `terminal-emulator` and `terminal-view` are Apache 2.0 but not published to Maven Central. Copy the source into `pi-remote-android/vendor/` as Gradle modules `:terminal-emulator` and `:terminal-view`. Track upstream commit SHA in `vendor/UPSTREAM.md`. Apache 2.0 NOTICE preserved. |
 | D3 | macOS suspend detection | cgo binding to Foundation framework, subscribing to `NSWorkspaceWillSleepNotification` and `NSWorkspaceDidWakeNotification`. Implementation in `internal/suspend/darwin.go` behind a `//go:build darwin` tag. Fallback non-suspend stub for other platforms in same package. |
 | D4 | Linux suspend detection | `github.com/godbus/dbus/v5` subscribing to the `PrepareForSleep` signal on `org.freedesktop.login1.Manager`. Implementation in `internal/suspend/linux.go` behind `//go:build linux`. |
-| D5 | CF Access auth flow on Android | Chrome Custom Tab via `androidx.browser:browser`, with App Links callback at `pi-remote://auth/callback`. JWT extracted from the `CF_Authorization` cookie via the cookie store after callback. Stored in `EncryptedSharedPreferences` (AndroidX Security Crypto). In-app `WebView` is NOT used for auth (cookie-isolation issues). |
+| D5 | CF Access auth flow on Android | Chrome Custom Tab via `androidx.browser:browser` opens `GET /v1/auth/app-callback` on the coordinator; CF Access authenticates the browser at the edge (email PIN) and the coordinator reflects the validated JWT into a `pi-remote://auth/callback?jwt=...` redirect, which App Links route back into the app. (Custom Tabs cannot expose the browser cookie jar to the app, so cookie extraction is infeasible; the reflection endpoint is the bridge.) Stored in `EncryptedSharedPreferences` (AndroidX Security Crypto). In-app `WebView` is NOT used for auth (cookie-isolation issues). |
 | D6 | Spawn token | 16 bytes from `crypto/rand`, hex-encoded as a 32-character string. Passed via env var `PI_REMOTE_SPAWN_TOKEN`. Daemon retains the token for 30s after spawn; if no extension registers within that window with a matching token, daemon kills the tmux session and reports failure to the coordinator. |
 | D7 | tmux server resilience | Daemon detects control-mode connection close (stdin EOF or `%exit` notification). On detection: clear in-memory session state, mark all sessions ended to coordinator with reason `tmux_server_lost`, attempt reconnect every 5 seconds. On reconnect, daemon does NOT try to recover prior sessions; user must spawn fresh ones. |
 | D8 | Terminal title spoofing | Daemon strips OSC 0, 1, and 2 sequences (xterm title-set sequences) from outbound pty bytes before forwarding. Strip patterns: `ESC ] (0\|1\|2) ; <text> BEL` and `ESC ] (0\|1\|2) ; <text> ESC \`. Implementation in `internal/ptymux/sanitize.go` with unit tests for both terminator forms. |
