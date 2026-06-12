@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { randomUUID } from "node:crypto";
+import { uuidv7 } from "./uuidv7.js";
 import { hostname } from "node:os";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -45,7 +45,7 @@ export default function piRemoteExtensionFactory(
   opts: PiRemoteFactoryOptions = {},
 ): PiRemoteExtensionInstance {
   const log = ctx?.log ?? ((msg: string) => console.log(`[${NAME}] ${msg}`));
-  const sessionId = randomUUID();
+  const sessionId = uuidv7(); // D17: time-ordered session ids (#46)
   const startedAt = Date.now();
   const cwd = ctx?.cwd ?? process.cwd();
   const pid = ctx?.pid ?? process.pid;
