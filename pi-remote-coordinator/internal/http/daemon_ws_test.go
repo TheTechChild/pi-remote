@@ -282,7 +282,7 @@ func TestDaemonWS_SocketClose_PausesSessions(t *testing.T) {
 	}
 	if !waitFor(2*time.Second, func() bool {
 		s, ok := ts.sessions.Get("sess-1")
-		return ok && s.State == "running"
+		return ok && s.GetState() == "running"
 	}) {
 		t.Fatal("session_started did not land")
 	}
@@ -293,7 +293,7 @@ func TestDaemonWS_SocketClose_PausesSessions(t *testing.T) {
 	// The handler's defer should pause sessions; machine entry is retained.
 	if !waitFor(2*time.Second, func() bool {
 		s, ok := ts.sessions.Get("sess-1")
-		return ok && s.State == "paused"
+		return ok && s.GetState() == "paused"
 	}) {
 		t.Fatalf("session not paused after socket close")
 	}

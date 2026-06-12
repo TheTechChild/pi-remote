@@ -43,8 +43,28 @@ type Ingestor struct {
 	sessions *sessions.Registry
 	log      *slog.Logger
 
-	mu        sync.Mutex
-	connState map[Conn]*connState
+	mu              sync.Mutex
+	connState       map[Conn]*connState
+	onMachineChange func()
+	onSpawnResponse func(reqID string, success bool, sessionID *string, errStr *string)
+}
+
+func (i *Ingestor) SetOnMachineChange(fn func()) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.onMachineChange = fn
+}
+
+func (i *Ingestor) SetOnSpawnResponse(fn func(reqID string, success bool, sessionID *string, errStr *string)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.onSpawnResponse = fn
+}
+
+func (i *Ingestor) notifyChange() {
+	if i.onMachineChange != nil {
+		i.onMachineChange()
+	}
 }
 
 type connState struct {
@@ -106,6 +126,8 @@ func (i *Ingestor) Handle(_ context.Context, sourceConn Conn, b []byte) error {
 		return i.handleSessionEnded(b)
 	case "session_resume":
 		return i.handleSessionResume(st, b)
+	case "spawn_response":
+		return i.handleSpawnResponse(b)
 	case "machine_suspending":
 		return i.handleMachineSuspending(st, b)
 	default:
@@ -164,6 +186,7 @@ func (i *Ingestor) handleMachineRegister(conn Conn, st *connState, b []byte) err
 		"display_name", msg.MachineDisplayName,
 		"daemon_version", msg.DaemonVersion,
 		"capabilities", caps)
+	i.notifyChange()
 	return nil
 }
 
@@ -175,6 +198,7 @@ func (i *Ingestor) handleSessionStarted(b []byte) error {
 	i.sessions.Register(msg.SessionId, msg.MachineId, msg.Metadata)
 	i.log.Info("session_started",
 		"session_id", msg.SessionId, "machine_id", msg.MachineId)
+	i.notifyChange()
 	return nil
 }
 
@@ -245,6 +269,7 @@ func (i *Ingestor) handleSessionStateChange(b []byte) error {
 	i.sessions.AdvanceSeq(msg.SessionId, msg.Seq)
 	i.log.Info("session_state_change",
 		"session_id", msg.SessionId, "from", string(msg.From), "to", string(msg.To))
+	i.notifyChange()
 	return nil
 }
 
@@ -257,6 +282,7 @@ func (i *Ingestor) handleSessionEnded(b []byte) error {
 	i.sessions.MarkEnded(msg.SessionId)
 	i.log.Info("session_ended",
 		"session_id", msg.SessionId, "reason", string(msg.Reason))
+	i.notifyChange()
 	return nil
 }
 
@@ -271,6 +297,7 @@ func (i *Ingestor) handleSessionResume(st *connState, b []byte) error {
 		i.sessions.RestoreLastSeq(msg.SessionId, msg.LastSeqEmitted)
 		i.log.Info("session_resume (known)",
 			"session_id", msg.SessionId, "last_seq_emitted", msg.LastSeqEmitted)
+		i.notifyChange()
 		return nil
 	}
 	// Unknown: create entry. We don't have a SessionStartedJsonMetadata
@@ -283,6 +310,7 @@ func (i *Ingestor) handleSessionResume(st *connState, b []byte) error {
 	i.log.Info("session_resume (unknown; coordinator-restart recovery)",
 		"session_id", msg.SessionId, "machine_id", st.machineID,
 		"last_seq_emitted", msg.LastSeqEmitted)
+	i.notifyChange()
 	return nil
 }
 
@@ -290,6 +318,31 @@ func (i *Ingestor) handleMachineSuspending(st *connState, _ []byte) error {
 	i.machines.SetSuspended(st.machineID)
 	i.sessions.PauseAllForMachine(st.machineID)
 	i.log.Info("machine_suspending", "machine_id", st.machineID)
+	i.notifyChange()
+	return nil
+}
+
+type daemonSpawnResponse struct {
+	Type       string  `json:"type"`
+	V          int     `json:"v"`
+	RequestID  string  `json:"request_id"`
+	Success    bool    `json:"success"`
+	SessionID  *string `json:"session_id,omitempty"`
+	TmuxTarget *string `json:"tmux_target,omitempty"`
+	Error      *string `json:"error,omitempty"`
+}
+
+func (i *Ingestor) handleSpawnResponse(b []byte) error {
+	var msg daemonSpawnResponse
+	if err := json.Unmarshal(b, &msg); err != nil {
+		return fmt.Errorf("%w: spawn_response: %v", ErrMalformedFrame, err)
+	}
+	i.mu.Lock()
+	onSpawn := i.onSpawnResponse
+	i.mu.Unlock()
+	if onSpawn != nil {
+		onSpawn(msg.RequestID, msg.Success, msg.SessionID, msg.Error)
+	}
 	return nil
 }
 

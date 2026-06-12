@@ -35,18 +35,25 @@ func NewMux(deps Deps) *http.ServeMux {
 
 	ingestor := machines.NewIngestor(deps.Machines, deps.Sessions, deps.Logger)
 
-	mux.Handle("/v1/daemon", &daemonWS{
-		auth:     deps.Auth,
-		sessions: deps.Sessions,
-		ingestor: ingestor,
-		log:      deps.Logger,
-	})
-	mux.Handle("/v1/client", &clientWS{
+	cWS := &clientWS{
 		auth:     deps.Auth,
 		clients:  deps.Clients,
 		sessions: deps.Sessions,
+		machines: deps.Machines,
 		log:      deps.Logger,
+	}
+
+	ingestor.SetOnMachineChange(cWS.broadcastMachineList)
+	ingestor.SetOnSpawnResponse(cWS.handleSpawnResponse)
+
+	mux.Handle("/v1/daemon", &daemonWS{
+		auth:            deps.Auth,
+		sessions:        deps.Sessions,
+		ingestor:        ingestor,
+		log:             deps.Logger,
+		onMachineChange: cWS.broadcastMachineList,
 	})
+	mux.Handle("/v1/client", cWS)
 	return mux
 }
 

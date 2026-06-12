@@ -8,13 +8,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"github.com/coder/websocket"
 
 	"github.com/TheTechChild/pi-remote-coordinator/internal/auth"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/clients"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/machines"
 	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
+	daemon_coordinator "github.com/TheTechChild/pi-remote-coordinator/internal/proto/daemon-coordinator"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
@@ -43,7 +46,124 @@ type clientWS struct {
 	auth     auth.Middleware
 	clients  *clients.Registry
 	sessions *sessions.Registry
+	machines *machines.Registry
 	log      *slog.Logger
+
+	subsMu sync.RWMutex
+	subs   map[string]chan []byte
+
+	spawnsMu sync.RWMutex
+	spawns   map[string]chan []byte
+}
+
+func (h *clientWS) buildMachineListFrame() ([]byte, error) {
+	machs := h.machines.List()
+	sessList := h.sessions.List()
+
+	// Group sessions by machine ID
+	sessByMachine := make(map[string][]coordinator_app.MachineListJsonMachinesElemSessionsElem)
+	for _, s := range sessList {
+		sID := s.SessionID
+		mID := s.MachineID
+		sState := s.GetState()
+		sMeta := s.GetMetadata()
+
+		metaBytes, _ := json.Marshal(sMeta)
+		var appMeta coordinator_app.MachineListJsonMachinesElemSessionsElemMetadata
+		_ = json.Unmarshal(metaBytes, &appMeta)
+
+		elem := coordinator_app.MachineListJsonMachinesElemSessionsElem{
+			SessionId: sID,
+			State:     coordinator_app.MachineListJsonMachinesElemSessionsElemState(sState),
+			Metadata:  appMeta,
+		}
+		sessByMachine[mID] = append(sessByMachine[mID], elem)
+	}
+
+	appMachs := make([]coordinator_app.MachineListJsonMachinesElem, 0, len(machs))
+	for _, m := range machs {
+		state := coordinator_app.MachineListJsonMachinesElemStateOnline
+		if m.State == "suspended" {
+			state = coordinator_app.MachineListJsonMachinesElemStateSuspended
+		}
+
+		sessions := sessByMachine[m.ID]
+		if sessions == nil {
+			sessions = []coordinator_app.MachineListJsonMachinesElemSessionsElem{}
+		}
+
+		appMachs = append(appMachs, coordinator_app.MachineListJsonMachinesElem{
+			MachineId:          m.ID,
+			MachineDisplayName: m.DisplayName,
+			State:              state,
+			Sessions:           sessions,
+		})
+	}
+
+	frame := coordinator_app.MachineListJson{
+		Type:     "machine_list",
+		V:        1,
+		Machines: appMachs,
+	}
+
+	return json.Marshal(frame)
+}
+
+func (h *clientWS) broadcastMachineList() {
+	b, err := h.buildMachineListFrame()
+	if err != nil {
+		h.log.Error("failed to build machine list frame", "err", err)
+		return
+	}
+
+	h.subsMu.RLock()
+	defer h.subsMu.RUnlock()
+	for _, ch := range h.subs {
+		select {
+		case ch <- b:
+		default:
+			// Queue full or client slow, skip
+		}
+	}
+}
+
+func (h *clientWS) handleSpawnResponse(reqID string, success bool, sessionID *string, errStr *string) {
+	h.spawnsMu.Lock()
+	ch, ok := h.spawns[reqID]
+	delete(h.spawns, reqID)
+	h.spawnsMu.Unlock()
+
+	if !ok {
+		h.log.Warn("spawn response: request_id not tracked", "request_id", reqID)
+		return
+	}
+
+	resp := coordinator_app.SpawnResponseJson{
+		Type:      "spawn_response",
+		V:         1,
+		RequestId: reqID,
+		Success:   success,
+	}
+	if success && sessionID != nil {
+		resp.SessionId = sessionID
+	} else if errStr != nil {
+		resp.Error = errStr
+	} else {
+		errVal := "spawn failed"
+		resp.Error = &errVal
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		h.log.Error("failed to marshal spawn_response", "err", err)
+		return
+	}
+
+	select {
+	case ch <- b:
+	default:
+		h.log.Warn("failed to send spawn response to client (channel full)")
+	}
 }
 
 func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +263,12 @@ func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var attachedSession *sessions.Session
 	defer func() {
+		h.subsMu.Lock()
+		if h.subs != nil {
+			delete(h.subs, connID)
+		}
+		h.subsMu.Unlock()
+
 		if attachedSession != nil {
 			attachedSession.Detach(connID)
 		}
@@ -233,6 +359,166 @@ func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				attachedSession = nil
 				h.log.Info("client detached from session", "client_id", hello.ClientId, "session_id", detach.SessionId)
 			}
+
+		case "subscribe_machine_list":
+			h.subsMu.Lock()
+			if h.subs == nil {
+				h.subs = make(map[string]chan []byte)
+			}
+			h.subs[connID] = sendChan
+			h.subsMu.Unlock()
+
+			// Immediately send the current snapshot
+			b, err := h.buildMachineListFrame()
+			if err != nil {
+				h.log.Error("failed to build machine list snapshot", "err", err)
+				continue
+			}
+			select {
+			case sendChan <- b:
+			default:
+			}
+
+		case "spawn_session":
+			var spawn coordinator_app.SpawnSessionJson
+			if err := json.Unmarshal(data, &spawn); err != nil {
+				h.log.Debug("client WS malformed spawn_session", "err", err)
+				continue
+			}
+
+			// Verify target machine is registered and online
+			mach, ok := h.machines.Get(spawn.MachineId)
+			if !ok || mach.State != "online" || mach.Conn == nil {
+				errStr := "Machine offline"
+				resp := coordinator_app.SpawnResponseJson{
+					Type:      "spawn_response",
+					V:         1,
+					RequestId: spawn.RequestId,
+					Success:   false,
+					Error:     &errStr,
+				}
+				b, _ := json.Marshal(resp)
+				select {
+				case sendChan <- b:
+				default:
+				}
+				continue
+			}
+
+			// Store request_id -> client sendChan
+			h.spawnsMu.Lock()
+			if h.spawns == nil {
+				h.spawns = make(map[string]chan []byte)
+			}
+			h.spawns[spawn.RequestId] = sendChan
+			h.spawnsMu.Unlock()
+
+			// Forward spawn_request to the daemon connection
+			var po daemon_coordinator.SpawnRequestJsonProjectOverride
+			if spawn.ProjectOverride != nil {
+				po = daemon_coordinator.SpawnRequestJsonProjectOverride(spawn.ProjectOverride)
+			}
+			daemonReq := daemon_coordinator.SpawnRequestJson{
+				Type:            "spawn_request",
+				V:               1,
+				RequestId:       spawn.RequestId,
+				Cwd:             spawn.Cwd,
+				ProjectOverride: po,
+			}
+			reqBytes, err := json.Marshal(daemonReq)
+			if err != nil {
+				h.log.Error("failed to marshal spawn request for daemon", "err", err)
+				h.handleSpawnResponse(spawn.RequestId, false, nil, &[]string{"Internal marshal error"}[0])
+				continue
+			}
+
+			err = mach.Conn.Write(ctx, websocket.MessageText, reqBytes)
+			if err != nil {
+				h.log.Warn("failed to write spawn request to daemon", "err", err)
+				h.handleSpawnResponse(spawn.RequestId, false, nil, &[]string{"Daemon write error"}[0])
+			}
+
+		case "pty_input":
+			var input coordinator_app.PtyInputJson
+			if err := json.Unmarshal(data, &input); err != nil {
+				h.log.Debug("client WS malformed pty_input", "err", err)
+				continue
+			}
+
+			s, ok := h.sessions.Get(input.SessionId)
+			if !ok {
+				continue
+			}
+
+			mach, ok := h.machines.Get(s.MachineID)
+			if !ok || mach.State != "online" || mach.Conn == nil {
+				continue
+			}
+
+			daemonInput := daemon_coordinator.PtyInputJson{
+				Type:      "pty_input",
+				V:         1,
+				SessionId: input.SessionId,
+				ClientId:  hello.ClientId,
+				Bytes:     input.Bytes,
+			}
+			inputBytes, err := json.Marshal(daemonInput)
+			if err != nil {
+				h.log.Error("failed to marshal pty_input", "err", err)
+				continue
+			}
+
+			err = mach.Conn.Write(ctx, websocket.MessageText, inputBytes)
+			if err != nil {
+				h.log.Warn("failed to write pty_input to daemon", "err", err)
+			}
+
+		case "pty_resize":
+			var resize struct {
+				SessionId string `json:"session_id"`
+				Cols      int    `json:"cols"`
+				Rows      int    `json:"rows"`
+			}
+			if err := json.Unmarshal(data, &resize); err != nil {
+				h.log.Debug("client WS malformed pty_resize", "err", err)
+				continue
+			}
+
+			s, ok := h.sessions.Get(resize.SessionId)
+			if !ok {
+				continue
+			}
+
+			mach, ok := h.machines.Get(s.MachineID)
+			if !ok || mach.State != "online" || mach.Conn == nil {
+				continue
+			}
+
+			daemonResize := daemon_coordinator.PtyResizeJson{
+				Type:      "pty_resize",
+				V:         1,
+				SessionId: resize.SessionId,
+				Cols:      resize.Cols,
+				Rows:      resize.Rows,
+			}
+			resizeBytes, err := json.Marshal(daemonResize)
+			if err != nil {
+				h.log.Error("failed to marshal pty_resize", "err", err)
+				continue
+			}
+
+			err = mach.Conn.Write(ctx, websocket.MessageText, resizeBytes)
+			if err != nil {
+				h.log.Warn("failed to write pty_resize to daemon", "err", err)
+			}
+
+		case "client_focus":
+			var focus coordinator_app.ClientFocusJson
+			if err := json.Unmarshal(data, &focus); err != nil {
+				h.log.Debug("client WS malformed client_focus", "err", err)
+				continue
+			}
+			h.log.Debug("client WS client_focus", "session_id", focus.SessionId, "focused", focus.Focused)
 
 		default:
 			h.log.Info("client WS unknown frame type (ignored)", "type", peek.Type)

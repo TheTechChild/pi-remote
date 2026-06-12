@@ -37,5 +37,11 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
   }
 }

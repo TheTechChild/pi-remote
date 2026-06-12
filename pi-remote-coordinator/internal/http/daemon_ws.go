@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/coder/websocket"
 
@@ -28,9 +29,10 @@ type daemonWS struct {
 	// machines is intentionally not held here: the Ingestor owns writes
 	// into the registry, and the WS handler only needs to pause sessions
 	// on socket close. The registry pointer lives on the Ingestor.
-	sessions *sessions.Registry
-	ingestor *machines.Ingestor
-	log      *slog.Logger
+	sessions        *sessions.Registry
+	ingestor        *machines.Ingestor
+	log             *slog.Logger
+	onMachineChange func()
 }
 
 // daemonConnAdapter wraps *websocket.Conn to satisfy the machines.Conn
@@ -38,6 +40,7 @@ type daemonWS struct {
 // a forceful close in the take-over path; Close(code, reason) is sufficient
 // here because the registry only needs to signal the peer.
 type daemonConnAdapter struct {
+	mu  sync.Mutex
 	c   *websocket.Conn
 	ctx context.Context
 }
@@ -47,6 +50,12 @@ func (a *daemonConnAdapter) Close(code websocket.StatusCode, reason string) erro
 }
 
 func (a *daemonConnAdapter) Context() context.Context { return a.ctx }
+
+func (a *daemonConnAdapter) Write(ctx context.Context, typ websocket.MessageType, b []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.c.Write(ctx, typ, b)
+}
 
 func (h *daemonWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	identity, err := h.auth.ServiceToken(r)
@@ -84,6 +93,9 @@ func (h *daemonWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = c.CloseNow()
 		if mid, ok := h.machineIDForConn(conn); ok {
 			h.sessions.PauseAllForMachine(mid)
+			if h.onMachineChange != nil {
+				h.onMachineChange()
+			}
 		}
 		h.ingestor.ForgetConn(conn)
 	}()

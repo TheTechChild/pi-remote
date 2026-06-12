@@ -32,5 +32,13 @@
       "indentStyle": "space",
       "indentWidth": 2
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": ["package.json"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ]
 }

@@ -37,6 +37,10 @@ func (f *fakeConn) Close(code websocket.StatusCode, reason string) error {
 
 func (f *fakeConn) Context() context.Context { return f.ctx }
 
+func (f *fakeConn) Write(ctx context.Context, typ websocket.MessageType, b []byte) error {
+	return nil
+}
+
 func (f *fakeConn) Closed() bool { return f.closedN.Load() > 0 }
 
 // C-23: Register adds entry; Get returns it.

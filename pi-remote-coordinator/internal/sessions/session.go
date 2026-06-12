@@ -64,3 +64,17 @@ func (s *Session) GetAttachedClients() []ClientConn {
 	}
 	return res
 }
+
+// GetState returns the session state in a thread-safe manner.
+func (s *Session) GetState() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.State
+}
+
+// GetMetadata returns the session metadata in a thread-safe manner.
+func (s *Session) GetMetadata() daemon_coordinator.SessionStartedJsonMetadata {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Metadata
+}
