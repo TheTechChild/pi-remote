@@ -56,6 +56,10 @@ func main() {
 		mw = auth.NewStub()
 		clientOpts = append(clientOpts, clients.WithStubFixture())
 	case "cfaccess":
+		if err := config.ValidateCFAccess(cfg); err != nil {
+			slog.Error("config invalid for -auth=cfaccess", "err", err)
+			os.Exit(1)
+		}
 		cf, err := auth.NewCFAccess(cfg.Cloudflare)
 		if err != nil {
 			slog.Error("cfaccess init failed", "err", err)

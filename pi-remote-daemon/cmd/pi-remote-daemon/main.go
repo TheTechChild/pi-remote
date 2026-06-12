@@ -25,11 +25,10 @@ import (
 // Version is set at build time via -ldflags; default value is for local builds.
 var Version = "0.0.0-dev"
 
-// flagOverrides bundles the dev-affordance CLI flags. Per #48 these are
-// a stop-gap until the real TOML loader lands; they let `go run` work
-// against a local coordinator without populating /etc/pi-remote/.
-// When the loader lands these become the top of the
-// flag > env > file > defaults precedence chain.
+// flagOverrides bundles the override CLI flags: the top of the
+// flag > env > file > defaults precedence chain (SPEC § 7.3, #48).
+// They let `go run` work against a local coordinator without populating
+// /etc/pi-remote/.
 type flagOverrides struct {
 	coordinatorURL  string
 	machineID       string
@@ -60,6 +59,17 @@ func main() {
 		os.Exit(1)
 	}
 	applyFlagOverrides(cfg, ovr)
+	// Finalize + Validate run after every override layer (flag > env >
+	// file > defaults) so first-run machine_id generation and validation
+	// observe the merged result.
+	if err := config.Finalize(cfg); err != nil {
+		slog.Error("config finalize failed", "err", err)
+		os.Exit(1)
+	}
+	if err := config.Validate(cfg); err != nil {
+		slog.Error("config invalid", "err", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

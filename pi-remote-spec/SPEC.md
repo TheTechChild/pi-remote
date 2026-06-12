@@ -361,6 +361,25 @@ file = "~/.pi-remote/daemon.log"
 
 Service token credentials live in 0600-mode files outside the config so the config can be checked into dotfiles without secrets.
 
+**Resolution and precedence.** The loader resolves configuration as `CLI flags > PI_REMOTE_* env vars > TOML file > built-in defaults`. When `--config` is not given, the per-user file (`$XDG_CONFIG_HOME/pi-remote/daemon.toml`, defaulting to `~/.config/pi-remote/daemon.toml`) is tried first, then `/etc/pi-remote/daemon.toml`; the first file found wins. An explicitly named `--config` file must exist and parse. Unknown TOML keys are errors (typo safety). Validation accumulates all problems into one report. There is no hot-reload (SIGHUP) and no `${VAR}` interpolation inside the TOML in v1 — the env layer covers that use case.
+
+**Environment variables (daemon).** One flat variable per leaf:
+
+| Variable | Overrides |
+|----------|-----------|
+| `PI_REMOTE_MACHINE_ID` | `machine_id` |
+| `PI_REMOTE_MACHINE_DISPLAY_NAME` | `machine_display_name` |
+| `PI_REMOTE_COORDINATOR_URL` | `coordinator.url` |
+| `PI_REMOTE_SERVICE_TOKEN_ID_FILE` | `coordinator.service_token_id_file` |
+| `PI_REMOTE_SERVICE_TOKEN_SECRET_FILE` | `coordinator.service_token_secret_file` |
+| `PI_REMOTE_SOCKET_PATH` | `socket.path` |
+| `PI_REMOTE_TMUX_BINARY` | `tmux.binary` |
+| `PI_REMOTE_TMUX_SESSION_PREFIX` | `tmux.session_prefix` |
+| `PI_REMOTE_LOG_LEVEL` | `logging.level` |
+| `PI_REMOTE_LOG_FILE` | `logging.file` |
+
+**First-run identity.** When `machine_id` is empty after all layers merge, the daemon reads it from a state file, generating a UUIDv7 (per D17) and persisting it on first run — never writing back into the operator-managed TOML. State file location: `$PI_REMOTE_STATE_DIR/machine_id` when set; `/var/lib/pi-remote/machine_id` when running as root; otherwise `$XDG_STATE_HOME/pi-remote/machine_id`, defaulting to `~/.local/state/pi-remote/machine_id` (same layout on macOS). An empty `machine_display_name` defaults to the OS hostname.
+
 ### 7.4 Process model
 
 The daemon runs as the user, not as root. It does not need elevated privileges.
@@ -494,6 +513,21 @@ session_cache_floor_bytes = 1048576   # 1MB minimum per active session before LR
 [push]
 coordinator_keypair_path = "/data/coordinator-keypair.box"  # generated on first run
 ```
+
+**Resolution and precedence.** Same model as the daemon (§ 7.3): `CLI flags > PI_REMOTE_* env vars > TOML file > defaults`; no hot-reload, no `${VAR}` interpolation, unknown keys are errors, validation accumulates. When `--config` is not given the search order is `/config/coordinator.toml` (the Docker volume layout above), then `$XDG_CONFIG_HOME/pi-remote/coordinator.toml` (default `~/.config/pi-remote/coordinator.toml`), then `/etc/pi-remote/coordinator.toml`. The `[cloudflare]` AUD fields are validated only when the process runs with `-auth=cfaccess`; the stub auth mode requires none of them.
+
+**Environment variables (coordinator).**
+
+| Variable | Overrides |
+|----------|-----------|
+| `PI_REMOTE_LISTEN` | `server.listen` |
+| `PI_REMOTE_ACCESS_AUD` | `cloudflare.access_aud` |
+| `PI_REMOTE_SERVICE_TOKEN_AUDIENCE` | `cloudflare.service_token_audience` |
+| `PI_REMOTE_NTFY_URL` | `ntfy.url` |
+| `PI_REMOTE_NTFY_AUTH_TOKEN` | `ntfy.auth_token` |
+| `PI_REMOTE_TOTAL_CACHE_BYTES` | `broker.total_cache_bytes` |
+| `PI_REMOTE_SESSION_CACHE_FLOOR_BYTES` | `broker.session_cache_floor_bytes` |
+| `PI_REMOTE_COORDINATOR_KEYPAIR_PATH` | `push.coordinator_keypair_path` |
 
 ### 8.4 Coordinator-side session model
 
