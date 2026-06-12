@@ -33,7 +33,8 @@ fun SettingsScreen(
     onSaveAndConnect: (url: String, jwt: String) -> Unit,
     onDisconnect: () -> Unit,
     onNavigateBack: () -> Unit,
-    onSavePushPrefs: (Map<String, Boolean>) -> Unit = {}
+    onSavePushPrefs: (Map<String, Boolean>) -> Unit = {},
+    onCfSignIn: () -> Unit = {}
 ) {
     var urlInput by remember { mutableStateOf(currentUrl) }
     var jwtInput by remember { mutableStateOf(currentJwt) }
@@ -123,6 +124,26 @@ fun SettingsScreen(
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
+
+            // CF Access sign-in (SPEC § D5): opens the email-PIN flow in
+            // a Custom Tab; the coordinator reflects the JWT back via the
+            // pi-remote://auth/callback deep link. Requires a saved URL.
+            OutlinedButton(
+                onClick = onCfSignIn,
+                enabled = urlInput.isNotBlank(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = IceBlue),
+                border = BorderStroke(1.dp, IceBlue),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+            ) {
+                Text(
+                    text = "Sign in with Cloudflare Access",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+            }
 
             // Status Indicator Info
             Row(

@@ -197,7 +197,7 @@ func TestValidateCFAccess(t *testing.T) {
 			t.Errorf("error %q missing %q", err, want)
 		}
 	}
-	cfg.Cloudflare = CloudflareConfig{AccessAud: "a", ServiceTokenAudience: "b"}
+	cfg.Cloudflare = CloudflareConfig{AccessAud: "a", ServiceTokenAudience: "b", TeamDomain: "t.cloudflareaccess.com"}
 	if err := ValidateCFAccess(cfg); err != nil {
 		t.Errorf("populated cloudflare section should pass: %v", err)
 	}

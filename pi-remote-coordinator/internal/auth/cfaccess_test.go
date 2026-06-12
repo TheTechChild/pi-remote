@@ -9,7 +9,7 @@ import (
 
 // C-11: Constructor with valid config returns non-nil, no error.
 func TestCFAccess_Constructor_Valid(t *testing.T) {
-	m, err := NewCFAccess(config.CloudflareConfig{AccessAud: "test-aud"})
+	m, err := NewCFAccess(config.CloudflareConfig{AccessAud: "test-aud", TeamDomain: "team.cloudflareaccess.com"})
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
