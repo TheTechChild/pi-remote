@@ -1,11 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: MIT -->
+<!-- π glyph, stroke-drawn so it actually renders (fills don't paint line
+     paths), with a terminal-cursor underscore accent. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#7C3AED"
-        android:pathData="M54,28 L54,80 M40,40 L40,68 M68,36 L68,72 M28,52 L80,52" />
+        android:strokeColor="#8EC9E8"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M32,40 L78,40" />
+    <path
+        android:strokeColor="#8EC9E8"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M42,40 L42,70" />
+    <path
+        android:strokeColor="#8EC9E8"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M66,40 L66,64 Q66,70 72,70" />
+    <path
+        android:strokeColor="#7C3AED"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:pathData="M40,80 L68,80" />
 </vector>

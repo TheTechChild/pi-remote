@@ -40,7 +40,9 @@ fun SettingsScreen(
     var jwtInput by remember { mutableStateOf(currentJwt) }
 
     val context = LocalContext.current
-    val pushRegistered = remember { PushManager.isRegistered(context) }
+    // Re-read on every recomposition: registration completes asynchronously
+    // after sign-in, and this is a cheap prefs lookup.
+    val pushRegistered = PushManager.isRegistered(context)
     val pushToggles = remember {
         mutableStateOf(PushManager.localReasonToggles(context))
     }
@@ -50,7 +52,7 @@ fun SettingsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Server Configuration",
+                        text = "Settings",
                         color = TextPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
@@ -81,17 +83,18 @@ fun SettingsScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Developer/Mock Connection Mode",
+                text = "CONNECTION",
                 color = TextSecondary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.fillMaxWidth()
             )
 
             // URL input field
             OutlinedTextField(
                 value = urlInput,
                 onValueChange = { urlInput = it },
-                label = { Text("Coordinator WebSocket URL", color = TextSecondary) },
+                label = { Text("Coordinator URL (ws:// or wss://)", color = TextSecondary) },
                 textStyle = androidx.compose.ui.text.TextStyle(
                     color = TextPrimary,
                     fontFamily = FontFamily.Monospace,
@@ -106,11 +109,12 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // Optional JWT input field
+            // Manual token override — normally filled by the Cloudflare
+            // sign-in below; only needed for stub-auth/dev coordinators.
             OutlinedTextField(
                 value = jwtInput,
                 onValueChange = { jwtInput = it },
-                label = { Text("Mock JWT Token (Optional)", color = TextSecondary) },
+                label = { Text("Access token (filled by sign-in; manual for dev)", color = TextSecondary) },
                 textStyle = androidx.compose.ui.text.TextStyle(
                     color = TextPrimary,
                     fontFamily = FontFamily.Monospace,
