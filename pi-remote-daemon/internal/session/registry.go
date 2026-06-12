@@ -179,7 +179,19 @@ func (r *Registry) UpdateHeartbeat(id string, ts time.Time) error {
 		return ErrUnknownSession
 	}
 	s.LastHeartbeat = ts
+	// Recovery (SPEC § 12.1): a heartbeat from an unresponsive session
+	// proves the channel is alive again.
+	var recovered bool
+	if s.State == StateUnresponsive {
+		s.State = StateRunning
+		recovered = true
+	}
+	onStateChange := r.onStateChange
 	r.mu.Unlock()
+
+	if recovered && onStateChange != nil {
+		safeInvoke("OnStateChange", func() { onStateChange(id, StateUnresponsive, StateRunning) })
+	}
 
 	_, onHeartbeat, _, _ := r.hookSnapshot()
 	if onHeartbeat != nil {
@@ -229,6 +241,50 @@ func (r *Registry) RemoveWithReason(id, reason string) {
 			safeInvoke("OnEnded", func() { onEnded(s, EndedExplicit, reason) })
 		}
 	}
+}
+
+// SweepHeartbeats flips every running/idle session whose extension has
+// been silent for longer than timeout to `unresponsive` (SPEC §§ 6.6,
+// 12.2: three missed 10s heartbeats ≥ 30s). Idempotent: already-
+// unresponsive, paused, and ended sessions are untouched. Returns the
+// ids transitioned this sweep. Issue #42.
+func (r *Registry) SweepHeartbeats(now time.Time, timeout time.Duration) []string {
+	r.mu.Lock()
+	var flipped []string
+	for id, s := range r.sessions {
+		if s.State != StateRunning && s.State != StateIdle {
+			continue
+		}
+		if now.Sub(s.LastHeartbeat) <= timeout {
+			continue
+		}
+		from := s.State
+		s.State = StateUnresponsive
+		flipped = append(flipped, id)
+		if r.onStateChange != nil {
+			fn := r.onStateChange
+			safeInvoke("OnStateChange", func() { fn(id, from, StateUnresponsive) })
+		}
+	}
+	r.mu.Unlock()
+	return flipped
+}
+
+// ReapEnded deletes entries that ended longer than ttl ago: attached
+// clients have long since seen the final state, and without a reaper the
+// registry grows unbounded over the daemon's lifetime. Returns the
+// number reaped. Issue #43.
+func (r *Registry) ReapEnded(now time.Time, ttl time.Duration) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reaped := 0
+	for id, s := range r.sessions {
+		if s.State == StateEnded && !s.EndedAt.IsZero() && now.Sub(s.EndedAt) > ttl {
+			delete(r.sessions, id)
+			reaped++
+		}
+	}
+	return reaped
 }
 
 // MarkEnded keeps the entry but flips State to `ended` and stamps

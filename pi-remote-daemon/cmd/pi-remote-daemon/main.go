@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/TheTechChild/pi-remote-daemon/internal/config"
 	"github.com/TheTechChild/pi-remote-daemon/internal/coordinator"
@@ -127,6 +128,33 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	handler := socket.NewHandler(registry, tmuxClient, log)
 	conns := newConnTracker()
+
+	// Housekeeping (issues #42, #43): heartbeat-timeout sweep flips silent
+	// sessions to unresponsive (3 missed 10s heartbeats, SPEC § 6.6);
+	// the reaper drops hour-old ended entries so the registry stays
+	// bounded over the daemon's lifetime.
+	housekeepCtx, housekeepCancel := context.WithCancel(context.Background())
+	defer housekeepCancel()
+	go func() {
+		sweep := time.NewTicker(10 * time.Second)
+		reap := time.NewTicker(5 * time.Minute)
+		defer sweep.Stop()
+		defer reap.Stop()
+		for {
+			select {
+			case <-housekeepCtx.Done():
+				return
+			case now := <-sweep.C:
+				for _, id := range registry.SweepHeartbeats(now, 30*time.Second) {
+					log.Warn("session unresponsive (heartbeat timeout)", "session_id", id)
+				}
+			case now := <-reap.C:
+				if n := registry.ReapEnded(now, time.Hour); n > 0 {
+					log.Info("reaped ended sessions", "count", n)
+				}
+			}
+		}
+	}()
 
 	var wg sync.WaitGroup
 	acceptDone := make(chan struct{})
