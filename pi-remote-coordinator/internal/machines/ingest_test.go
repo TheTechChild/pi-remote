@@ -586,7 +586,7 @@ func TestIngest_PushTriggers(t *testing.T) {
 	// attention_dialog → extension_dialog, summary from payload title.
 	ev := sessionEventFrame("sess-1", 1)
 	ev["kind"] = "attention_dialog"
-	ev["payload"] = map[string]any{"title": "rm -rf node_modules"}
+	ev["data"] = map[string]any{"title": "rm -rf node_modules"}
 	mustHandle(t, h.ing, h.conn, frame(t, ev))
 
 	// agent_start: not in the push-trigger set.

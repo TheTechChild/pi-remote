@@ -286,11 +286,11 @@ func (i *Ingestor) handleSessionEvent(b []byte) error {
 // session_event frame, best-effort (payload fields are free-form).
 func eventSummary(kind string, raw []byte) string {
 	var frame struct {
-		Payload map[string]any `json:"payload"`
+		Data map[string]any `json:"data"`
 	}
 	_ = json.Unmarshal(raw, &frame)
 	str := func(key string) string {
-		if v, ok := frame.Payload[key].(string); ok {
+		if v, ok := frame.Data[key].(string); ok {
 			return v
 		}
 		return ""
