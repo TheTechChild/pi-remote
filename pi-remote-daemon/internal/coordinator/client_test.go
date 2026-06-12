@@ -935,3 +935,53 @@ func TestClient_UnknownFrameFromServer_LoggedAndDropped(t *testing.T) {
 	// not crash on the unknown frame.
 	clock.WaitForSleep(t, 1)
 }
+
+// Issues #14/#16: NotifySuspend emits machine_suspending and closes the
+// connection inside the pre-sleep window; the next handshake re-registers
+// and appends machine_resumed (SPEC § 7.7).
+func TestClient_SuspendResumeCycle(t *testing.T) {
+	srv := newStubServer()
+	defer srv.Close()
+
+	idPath, secretPath := writeCreds(t, "test-machine", "test-secret")
+	clock := newFakeClock()
+	ctx, cancel := context.WithCancel(context.Background())
+	c := coordinator.NewClient(coordinator.Config{
+		URL:             srv.URL(),
+		IDFile:          idPath,
+		SecretFile:      secretPath,
+		MachineRegister: defaultRegister(),
+		LiveSnapshot:    emptyLive,
+		Clock:           clock,
+	})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); _ = c.Run(ctx) }()
+	defer wg.Wait()
+	defer cancel()
+
+	waitForConnects(t, srv, 1)
+	waitForFrame(t, srv, 0) // machine_register on conn 1
+
+	// Lid closes: the suspend watcher fires.
+	c.NotifySuspend()
+	waitForFrame(t, srv, 1) // machine_suspending before the close
+
+	// Wake: the reconnect loop's backoff releases and the client
+	// re-dials, re-registers, and announces the resume.
+	clock.WaitForSleep(t, 1)
+	clock.Advance(time.Second)
+	waitForConnects(t, srv, 2)
+	waitForFrame(t, srv, 3)
+
+	var types []string
+	for _, f := range srv.Frames()[:4] {
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(f, &got))
+		types = append(types, got["type"].(string))
+	}
+	require.Equal(t,
+		[]string{"machine_register", "machine_suspending", "machine_register", "machine_resumed"},
+		types,
+		"suspend/resume frame sequence per SPEC § 7.7")
+}

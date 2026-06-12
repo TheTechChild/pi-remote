@@ -4,8 +4,10 @@ package session
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -81,6 +83,10 @@ type Multiplex struct {
 
 	mu   sync.Mutex
 	seqs map[string]*SeqAllocator
+
+	// pidAlive probes process existence for LiveSessions (issue #16);
+	// defaultPidAlive in production, injectable in tests.
+	pidAlive func(int) bool
 }
 
 // NewMultiplex wires the registry's hooks to the multiplex and binds
@@ -99,6 +105,7 @@ func NewMultiplex(reg *Registry, coord Coord, frames FrameBuilder, machineID str
 		machineID: machineID,
 		now:       now,
 		seqs:      make(map[string]*SeqAllocator),
+		pidAlive:  defaultPidAlive,
 	}
 	reg.OnRegister(m.onRegister)
 	reg.OnEvent(m.onEvent)
@@ -252,6 +259,12 @@ func (m *Multiplex) LiveSessions() []LiveSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range sessions {
+		// Issue #16: never announce a session whose Pi process died while
+		// we were disconnected (e.g. across a suspend) — the coordinator
+		// would resurrect a zombie entry.
+		if sessions[i].PID > 0 && !m.pidAlive(sessions[i].PID) {
+			continue
+		}
 		var last uint64
 		if a, ok := m.seqs[sessions[i].SessionID]; ok {
 			last = a.Peek()
@@ -259,6 +272,13 @@ func (m *Multiplex) LiveSessions() []LiveSession {
 		out = append(out, LiveSession{Session: sessions[i], LastSeq: last})
 	}
 	return out
+}
+
+// defaultPidAlive reports whether pid exists (signal 0 probe; EPERM
+// still means "exists").
+func defaultPidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // errString is a nil-safe error.Error wrapper for log fields.

@@ -3,6 +3,8 @@ package session_test
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -262,7 +264,7 @@ func TestMultiplex_TwoEvents_SeqAdvances(t *testing.T) {
 func TestMultiplex_PerSessionSeq_StartsAtOneEach(t *testing.T) {
 	reg, coord, _ := startMultiplex(t)
 	require.True(t, mustRegister(t, reg, newSession("sess-A", 1)))
-	require.True(t, mustRegister(t, reg, newSession("sess-B", 2)))
+	require.True(t, mustRegister(t, reg, newSession("sess-B", os.Getpid())))
 
 	reg.Event("sess-A", []byte(`{"type":"event","kind":"agent_start","data":{}}`))
 	reg.Event("sess-B", []byte(`{"type":"event","kind":"agent_start","data":{}}`))
@@ -486,7 +488,7 @@ func TestMultiplex_SendError_DoesNotRollbackSeq(t *testing.T) {
 func TestMultiplex_LiveSessions_ReturnsSnapshotForResume(t *testing.T) {
 	reg, coord, mux := startMultiplex(t)
 	require.True(t, mustRegister(t, reg, newSession("sess-A", 1)))
-	require.True(t, mustRegister(t, reg, newSession("sess-B", 2)))
+	require.True(t, mustRegister(t, reg, newSession("sess-B", os.Getpid())))
 
 	reg.Event("sess-A", []byte(`{"type":"event","kind":"agent_start","data":{}}`))
 	reg.Event("sess-A", []byte(`{"type":"event","kind":"agent_end","data":{}}`))
@@ -510,7 +512,7 @@ func TestMultiplex_LiveSessions_ReturnsSnapshotForResume(t *testing.T) {
 func TestMultiplex_EndedSession_DropsFromLive(t *testing.T) {
 	reg, _, mux := startMultiplex(t)
 	require.True(t, mustRegister(t, reg, newSession("sess-A", 1)))
-	require.True(t, mustRegister(t, reg, newSession("sess-B", 2)))
+	require.True(t, mustRegister(t, reg, newSession("sess-B", os.Getpid())))
 
 	reg.RemoveWithReason("sess-A", "session_shutdown")
 
@@ -547,3 +549,26 @@ func TestMultiplex_MalformedEventBytes_DoesNotPanic_DropsFrame(t *testing.T) {
 // referenced indirectly through the frame helpers but not by symbol
 // here. (Remove this if a direct reference appears.)
 var _ = pb.SessionEventJson{}
+
+// Issue #16: LiveSessions must not announce sessions whose Pi process
+// died while the daemon was disconnected (e.g. across a suspend).
+func TestMultiplex_LiveSessions_SkipsDeadPids(t *testing.T) {
+	reg := session.NewRegistry()
+	mux := session.NewMultiplex(reg, newStubCoord(), stubFrames{}, "macbook-pro", nil)
+
+	// A pid that existed moments ago but is now guaranteed dead.
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Run())
+	deadPid := cmd.Process.Pid
+
+	reg.Register(&session.Session{SessionID: "sess-alive", PID: os.Getpid()})
+	reg.Register(&session.Session{SessionID: "sess-dead", PID: deadPid})
+
+	live := mux.LiveSessions()
+	ids := make([]string, 0, len(live))
+	for _, ls := range live {
+		ids = append(ids, ls.Session.SessionID)
+	}
+	require.Equal(t, []string{"sess-alive"}, ids,
+		"dead-pid session must be filtered from resume announcements")
+}
