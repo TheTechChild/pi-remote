@@ -46,7 +46,7 @@ type Deps struct {
 // See docs/phase1/batch-2-coordinator-link.md.
 func NewMux(deps Deps) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/health", handleHealth)
+	mux.HandleFunc("GET /v1/health", healthHandler(deps.Keypair != nil))
 
 	ingestor := machines.NewIngestor(deps.Machines, deps.Sessions, deps.Logger)
 
@@ -90,10 +90,21 @@ func NewMux(deps Deps) *http.ServeMux {
 	return mux
 }
 
-func handleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+// healthHandler reports overall liveness plus push-subsystem readiness.
+// A coordinator whose keypair could not be loaded or generated still
+// brokers sessions, but push registration is disabled — that degraded
+// state must be observable (not just one startup WARN line), so
+// monitoring and smoke tests can catch e.g. a /data permission sweep.
+func healthHandler(pushReady bool) http.HandlerFunc {
+	body := []byte(`{"status":"ok","push":"ready"}`)
+	if !pushReady {
+		body = []byte(`{"status":"ok","push":"disabled"}`)
+	}
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}
 }
 
 // writeAuthRequired emits the canonical 403 + ERR_COORD_AUTH_REQUIRED body.
