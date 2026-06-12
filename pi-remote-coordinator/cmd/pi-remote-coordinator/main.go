@@ -17,6 +17,7 @@ import (
 	"github.com/TheTechChild/pi-remote-coordinator/internal/config"
 	httpapi "github.com/TheTechChild/pi-remote-coordinator/internal/http"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/machines"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/push"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
@@ -71,12 +72,37 @@ func main() {
 		os.Exit(1)
 	}
 
+	// X25519 identity for push (SPEC § 19.2): generated on first run,
+	// loaded thereafter. Non-fatal when the path is unwritable — the
+	// coordinator still brokers sessions; push registration is disabled.
+	keypair, err := push.LoadOrGenerateKeypair(cfg.Push.CoordinatorKeypairPath)
+	if err != nil {
+		slog.Warn("push keypair unavailable; /v1/clients/register disabled", "err", err)
+		keypair = nil
+	}
+
+	clientReg := clients.NewRegistry(clientOpts...)
+	focus := push.NewFocusTracker()
+	var dispatcher *push.Dispatcher
+	if keypair != nil {
+		dispatcher = &push.Dispatcher{
+			Clients: clientReg,
+			Focus:   focus,
+			Keypair: keypair,
+			Poster:  &push.NtfyPoster{AuthToken: cfg.Ntfy.AuthToken},
+			Log:     logger,
+		}
+	}
+
 	deps := httpapi.Deps{
 		Auth:     mw,
 		Machines: machines.NewRegistry(),
 		Sessions: sessions.NewRegistryWithLimits(cfg.Broker.TotalCacheBytes, cfg.Broker.SessionCacheFloorBytes),
-		Clients:  clients.NewRegistry(clientOpts...),
+		Clients:  clientReg,
 		Logger:   logger,
+		Keypair:  keypair,
+		Focus:    focus,
+		Push:     dispatcher,
 	}
 	mux := httpapi.NewMux(deps)
 	srv := &http.Server{

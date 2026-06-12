@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/push"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
@@ -564,5 +565,85 @@ func TestIngest_SessionEvent_FannedOutToAttached(t *testing.T) {
 	mustHandle(t, h.ing, h.conn, frame(t, sessionEventFrame("sess-1", 1)))
 	if got := len(c.collected()); got != 1 {
 		t.Errorf("stale seq was fanned out: %d frames, want 1", got)
+	}
+}
+
+// capturePush installs a synchronous push hook on the harness.
+func (h *testHarness) capturePush() *[]push.Notification {
+	var captured []push.Notification
+	h.ing.SetOnPush(func(n push.Notification) { captured = append(captured, n) })
+	return &captured
+}
+
+// Push triggers (SPEC §§ 6.4, 8.7): event kinds map to push reasons with
+// machine/project context resolved from the registries.
+func TestIngest_PushTriggers(t *testing.T) {
+	h := newHarness(t)
+	h.register(t)
+	mustHandle(t, h.ing, h.conn, frame(t, sessionStartedFrame("sess-1")))
+	captured := h.capturePush()
+
+	// attention_dialog → extension_dialog, summary from payload title.
+	ev := sessionEventFrame("sess-1", 1)
+	ev["kind"] = "attention_dialog"
+	ev["payload"] = map[string]any{"title": "rm -rf node_modules"}
+	mustHandle(t, h.ing, h.conn, frame(t, ev))
+
+	// agent_start: not in the push-trigger set.
+	ev2 := sessionEventFrame("sess-1", 2)
+	ev2["kind"] = "agent_start"
+	mustHandle(t, h.ing, h.conn, frame(t, ev2))
+
+	// state → idle: agent_idle.
+	mustHandle(t, h.ing, h.conn, frame(t, map[string]any{
+		"type": "session_state_change", "v": 1, "session_id": "sess-1",
+		"seq": 3, "ts": 1700000000, "from": "running", "to": "idle",
+	}))
+
+	// session_ended → session_ended.
+	mustHandle(t, h.ing, h.conn, frame(t, map[string]any{
+		"type": "session_ended", "v": 1, "session_id": "sess-1",
+		"seq": 4, "reason": "process_exit",
+	}))
+
+	got := *captured
+	if len(got) != 3 {
+		t.Fatalf("captured %d notifications, want 3: %+v", len(got), got)
+	}
+	if got[0].Reason != "extension_dialog" ||
+		got[0].Summary != "Permission required: rm -rf node_modules" {
+		t.Errorf("notification 0: %+v", got[0])
+	}
+	if got[1].Reason != "agent_idle" {
+		t.Errorf("notification 1: %+v", got[1])
+	}
+	if got[2].Reason != "session_ended" {
+		t.Errorf("notification 2: %+v", got[2])
+	}
+	for i, n := range got {
+		if n.SessionID != "sess-1" || n.MachineID != "macbook-pro" ||
+			n.MachineDisplayName != "MacBook Pro" || n.ProjectName != "pi-remote" {
+			t.Errorf("notification %d context: %+v", i, n)
+		}
+	}
+}
+
+// Stale (non-advancing) seqs never re-trigger a push.
+func TestIngest_PushNotTriggeredForStaleSeq(t *testing.T) {
+	h := newHarness(t)
+	h.register(t)
+	mustHandle(t, h.ing, h.conn, frame(t, sessionStartedFrame("sess-1")))
+	captured := h.capturePush()
+
+	ev := sessionEventFrame("sess-1", 1)
+	ev["kind"] = "tool_failure"
+	mustHandle(t, h.ing, h.conn, frame(t, ev))
+	mustHandle(t, h.ing, h.conn, frame(t, ev)) // replayed duplicate
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured %d notifications, want 1 (stale seq must not re-push)", len(*captured))
+	}
+	if (*captured)[0].Reason != "tool_failure" || (*captured)[0].Summary != "A tool failed" {
+		t.Errorf("notification: %+v", (*captured)[0])
 	}
 }

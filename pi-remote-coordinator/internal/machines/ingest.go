@@ -12,6 +12,7 @@ import (
 	"github.com/TheTechChild/pi-remote-coordinator/internal/broker"
 	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
 	daemon_coordinator "github.com/TheTechChild/pi-remote-coordinator/internal/proto/daemon-coordinator"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/push"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
@@ -48,6 +49,56 @@ type Ingestor struct {
 	connState       map[Conn]*connState
 	onMachineChange func()
 	onSpawnResponse func(reqID string, success bool, sessionID *string, errStr *string)
+	onPush          func(n push.Notification)
+}
+
+// SetOnPush installs the push-dispatch hook. The Ingestor invokes it
+// synchronously; production wiring wraps it in a goroutine.
+func (i *Ingestor) SetOnPush(fn func(n push.Notification)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.onPush = fn
+}
+
+// pushEventReasons maps session_event kinds to push reasons (SPEC § 6.4
+// trigger column + § 10.4 reason enum). agent_idle and unresponsive are
+// driven by session_state_change instead, so agent_end never double-fires
+// with the idle transition.
+var pushEventReasons = map[string]string{
+	"attention_dialog": "extension_dialog",
+	"tool_failure":     "tool_failure",
+	"queue_update":     "queue_update",
+	"extension_error":  "extension_error",
+	"compaction_end":   "compaction_complete",
+}
+
+// notifyPush builds and emits a push.Notification for sessionID, filling
+// machine/project context from the registries. No-op when no hook is set
+// or the session is unknown.
+func (i *Ingestor) notifyPush(sessionID, reason, summary string) {
+	i.mu.Lock()
+	fn := i.onPush
+	i.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	s, ok := i.sessions.Get(sessionID)
+	if !ok {
+		return
+	}
+	meta := s.GetMetadata()
+	displayName := s.MachineID
+	if m, ok := i.machines.Get(s.MachineID); ok {
+		displayName = m.DisplayName
+	}
+	fn(push.Notification{
+		Reason:             reason,
+		SessionID:          sessionID,
+		MachineID:          s.MachineID,
+		MachineDisplayName: displayName,
+		ProjectName:        meta.ProjectName,
+		Summary:            summary,
+	})
 }
 
 func (i *Ingestor) SetOnMachineChange(fn func()) {
@@ -224,7 +275,46 @@ func (i *Ingestor) handleSessionEvent(b []byte) error {
 		Ts:      int64(msg.Ts),
 		Payload: b,
 	})
+
+	if reason, ok := pushEventReasons[string(msg.Kind)]; ok {
+		i.notifyPush(msg.SessionId, reason, eventSummary(string(msg.Kind), b))
+	}
 	return nil
+}
+
+// eventSummary derives the human one-liner for a push from the raw
+// session_event frame, best-effort (payload fields are free-form).
+func eventSummary(kind string, raw []byte) string {
+	var frame struct {
+		Payload map[string]any `json:"payload"`
+	}
+	_ = json.Unmarshal(raw, &frame)
+	str := func(key string) string {
+		if v, ok := frame.Payload[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+	switch kind {
+	case "attention_dialog":
+		if t := str("title"); t != "" {
+			return "Permission required: " + t
+		}
+		return "Agent needs your input"
+	case "tool_failure":
+		if t := str("toolName"); t != "" {
+			return "Tool failed: " + t
+		}
+		return "A tool failed"
+	case "queue_update":
+		return "Queue updated"
+	case "extension_error":
+		return "Extension error"
+	case "compaction_end":
+		return "Compaction complete"
+	default:
+		return kind
+	}
 }
 
 func (i *Ingestor) handleSessionPty(b []byte) error {
@@ -257,6 +347,12 @@ func (i *Ingestor) handleSessionStateChange(b []byte) error {
 	i.sessions.SetState(msg.SessionId, string(msg.To))
 	i.sessions.AdvanceSeq(msg.SessionId, msg.Seq)
 	i.forwardStateChange(msg.SessionId, string(msg.From), string(msg.To))
+	switch string(msg.To) {
+	case "idle":
+		i.notifyPush(msg.SessionId, "agent_idle", "Agent is waiting for input")
+	case "unresponsive":
+		i.notifyPush(msg.SessionId, "unresponsive", "Session is unresponsive")
+	}
 	i.log.Info("session_state_change",
 		"session_id", msg.SessionId, "from", string(msg.From), "to", string(msg.To))
 	i.notifyChange()
@@ -310,6 +406,7 @@ func (i *Ingestor) handleSessionEnded(b []byte) error {
 			i.log.Error("session_ended forward marshal", "err", err)
 		}
 	}
+	i.notifyPush(msg.SessionId, "session_ended", "Session ended ("+string(msg.Reason)+")")
 	i.log.Info("session_ended",
 		"session_id", msg.SessionId, "reason", string(msg.Reason))
 	i.notifyChange()

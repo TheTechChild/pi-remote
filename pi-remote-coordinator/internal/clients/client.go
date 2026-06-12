@@ -8,11 +8,26 @@ package clients
 
 import "time"
 
-// Client is the coordinator's view of one registered remote app device.
-// Workstream C deliberately omits the X25519 pubkey fields — they land
-// with the push/registration milestones.
+// Client is the coordinator's view of one registered remote app device
+// (SPEC.md §§ 11.3, 19.2).
 type Client struct {
 	ID                string
 	DeviceDisplayName string
 	LastSeen          time.Time
+
+	// UnifiedPushEndpoint is the full per-device push URL (ntfy topic
+	// included) supplied at registration. Empty for clients that have
+	// not registered for push.
+	UnifiedPushEndpoint string
+
+	// X25519PubKey is the device's crypto_box public key; push payloads
+	// are sealed to it (SPEC.md § 10.4). Zero-valued when unset.
+	X25519PubKey [32]byte
+
+	RegisteredAt time.Time
+
+	// Preferences holds per-reason push toggles (SPEC.md § 19.6) set via
+	// POST /v1/clients/<id>/preferences. nil = no overrides; the § 19.6
+	// defaults apply (see internal/push.ReasonEnabled).
+	Preferences map[string]bool
 }

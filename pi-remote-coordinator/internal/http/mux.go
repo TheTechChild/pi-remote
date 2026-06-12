@@ -8,6 +8,7 @@ import (
 	"github.com/TheTechChild/pi-remote-coordinator/internal/auth"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/clients"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/machines"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/push"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
@@ -20,6 +21,20 @@ type Deps struct {
 	Sessions *sessions.Registry
 	Clients  *clients.Registry
 	Logger   *slog.Logger
+
+	// Keypair is the coordinator's X25519 identity (SPEC § 19.2). When
+	// nil, POST /v1/clients/register is not routed — push registration
+	// requires the keypair.
+	Keypair *push.Keypair
+
+	// Focus tracks per-(client,session) foreground state for push
+	// suppression (SPEC § 9.7). Optional.
+	Focus *push.FocusTracker
+
+	// Push, when non-nil, receives a Notification for every push-worthy
+	// occurrence ingested from daemons (SPEC §§ 8.7-8.8). Dispatch runs
+	// in its own goroutine to keep the daemon read loop hot.
+	Push *push.Dispatcher
 }
 
 // NewMux constructs the coordinator's HTTP routes:
@@ -40,11 +55,16 @@ func NewMux(deps Deps) *http.ServeMux {
 		clients:  deps.Clients,
 		sessions: deps.Sessions,
 		machines: deps.Machines,
+		focus:    deps.Focus,
 		log:      deps.Logger,
 	}
 
 	ingestor.SetOnMachineChange(cWS.broadcastMachineList)
 	ingestor.SetOnSpawnResponse(cWS.handleSpawnResponse)
+	if deps.Push != nil {
+		dispatcher := deps.Push
+		ingestor.SetOnPush(func(n push.Notification) { go dispatcher.Dispatch(n) })
+	}
 
 	mux.Handle("/v1/daemon", &daemonWS{
 		auth:            deps.Auth,
@@ -54,6 +74,19 @@ func NewMux(deps Deps) *http.ServeMux {
 		onMachineChange: cWS.broadcastMachineList,
 	})
 	mux.Handle("/v1/client", cWS)
+	if deps.Keypair != nil {
+		mux.Handle("POST /v1/clients/register", &clientsRegister{
+			auth:    deps.Auth,
+			clients: deps.Clients,
+			keypair: deps.Keypair,
+			log:     deps.Logger,
+		})
+	}
+	mux.Handle("POST /v1/clients/{client_id}/preferences", &clientsPreferences{
+		auth:    deps.Auth,
+		clients: deps.Clients,
+		log:     deps.Logger,
+	})
 	return mux
 }
 

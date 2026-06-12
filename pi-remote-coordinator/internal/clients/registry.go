@@ -36,6 +36,45 @@ func NewRegistry(opts ...Option) *Registry {
 	return r
 }
 
+// Register inserts (or replaces) a client record. Called by the
+// POST /v1/clients/register handler (SPEC.md § 11.3).
+func (r *Registry) Register(c *Client) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	snap := *c
+	r.m[c.ID] = &snap
+}
+
+// List returns a snapshot of all registered clients.
+func (r *Registry) List() []*Client {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make([]*Client, 0, len(r.m))
+	for _, c := range r.m {
+		snap := *c
+		res = append(res, &snap)
+	}
+	return res
+}
+
+// SetPreferences replaces the stored per-reason push toggles for id.
+// Returns false when the client is unknown. The map is copied, and reads
+// always observe a complete map (replace-on-write, never mutate-in-place).
+func (r *Registry) SetPreferences(id string, prefs map[string]bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.m[id]
+	if !ok {
+		return false
+	}
+	cp := make(map[string]bool, len(prefs))
+	for k, v := range prefs {
+		cp[k] = v
+	}
+	c.Preferences = cp
+	return true
+}
+
 // Get returns a snapshot of the client and ok=true, or (nil, false).
 func (r *Registry) Get(id string) (*Client, bool) {
 	r.mu.RLock()

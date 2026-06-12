@@ -18,6 +18,7 @@ import (
 	"github.com/TheTechChild/pi-remote-coordinator/internal/machines"
 	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
 	daemon_coordinator "github.com/TheTechChild/pi-remote-coordinator/internal/proto/daemon-coordinator"
+	"github.com/TheTechChild/pi-remote-coordinator/internal/push"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
@@ -47,6 +48,7 @@ type clientWS struct {
 	clients  *clients.Registry
 	sessions *sessions.Registry
 	machines *machines.Registry
+	focus    *push.FocusTracker // nil-safe: focus tracking disabled when nil
 	log      *slog.Logger
 
 	subsMu sync.RWMutex
@@ -271,6 +273,11 @@ func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if attachedSession != nil {
 			attachedSession.Detach(connID)
+		}
+		// A closed connection implicitly flips all of this client's
+		// sessions to unfocused (issue #25, SPEC § 9.7).
+		if h.focus != nil {
+			h.focus.DropConn(connID)
 		}
 	}()
 
@@ -508,6 +515,9 @@ func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal(data, &focus); err != nil {
 				h.log.Debug("client WS malformed client_focus", "err", err)
 				continue
+			}
+			if h.focus != nil {
+				h.focus.SetFocus(connID, hello.ClientId, focus.SessionId, focus.Focused)
 			}
 			h.log.Debug("client WS client_focus", "session_id", focus.SessionId, "focused", focus.Focused)
 
