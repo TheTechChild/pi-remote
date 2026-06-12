@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import dev.pi_remote.android.net.ConnectionStatus
 import dev.pi_remote.android.net.WebSocketClient
 import dev.pi_remote.android.proto.SessionInfo
@@ -30,6 +31,7 @@ import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import dev.pi_remote.android.push.Notifications
 import dev.pi_remote.android.push.PushManager
+import dev.pi_remote.android.push.SecureStore
 import org.unifiedpush.android.connector.UnifiedPush
 import dev.pi_remote.android.sessions.DeepSpaceBackground
 import dev.pi_remote.android.sessions.SessionListScreen
@@ -81,9 +83,11 @@ class MainActivity : ComponentActivity() {
         deepLinkSessionId.value = sessionIdFromIntent(intent)
         jwtFromIntent(intent)?.let { onCfJwtReceived(it) }
 
-        // Load saved connection details and auto-connect if a URL is stored
+        // Load saved connection details and auto-connect if a URL is stored.
+        // The JWT lives in Keystore-backed encrypted prefs (SPEC § D5);
+        // SecureStore also migrates any legacy plaintext copy on first use.
         var savedUrl = sharedPreferences.getString("coordinator_url", "") ?: ""
-        val savedJwt = sharedPreferences.getString("mock_jwt", "") ?: ""
+        val savedJwt = SecureStore.prefs(this).getString("mock_jwt", "") ?: ""
 
         if (savedUrl.isNotEmpty()) {
             val trimmed = savedUrl.trim()
@@ -137,7 +141,7 @@ class MainActivity : ComponentActivity() {
 
     /** Store the real CF Access JWT, reconnect, and retry registration. */
     private fun onCfJwtReceived(jwt: String) {
-        sharedPreferences.edit().putString("mock_jwt", jwt).apply()
+        SecureStore.prefs(this).edit().putString("mock_jwt", jwt).apply()
         val url = sharedPreferences.getString("coordinator_url", "") ?: ""
         if (url.isNotEmpty()) {
             webSocketClient.disconnect()
@@ -176,6 +180,7 @@ fun AppNavigation(
 ) {
     var currentScreen by remember { mutableStateOf(Screen.SESSION_LIST) }
     var activeSession by remember { mutableStateOf<SessionInfo?>(null) }
+    val context = LocalContext.current
 
     val connectionStatus by webSocketClient.connectionStatus.collectAsState()
     val machines by webSocketClient.machines.collectAsState()
@@ -243,6 +248,8 @@ fun AppNavigation(
                     jwt = newJwt
                     sharedPreferences.edit()
                         .putString("coordinator_url", normalizedUrl)
+                        .apply()
+                    SecureStore.prefs(context).edit()
                         .putString("mock_jwt", newJwt)
                         .apply()
                     webSocketClient.disconnect()
