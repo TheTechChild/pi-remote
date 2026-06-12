@@ -120,7 +120,9 @@ jobs:
       - name: Build
         run: go build ./...
       - name: Test
-        run: go test ./...
+        # -race per docs/go-local-dev.md and the M3/M4 acceptance criteria;
+        # -count=1 defeats the test cache so concurrent paths re-run.
+        run: go test -race -count=1 ./...
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
@@ -147,7 +149,9 @@ jobs:
         run: go build ./...
       - name: Test
         working-directory: pi-remote-coordinator
-        run: go test ./...
+        # -race per docs/go-local-dev.md and the M3/M4 acceptance criteria;
+        # -count=1 defeats the test cache so concurrent paths re-run.
+        run: go test -race -count=1 ./...
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:

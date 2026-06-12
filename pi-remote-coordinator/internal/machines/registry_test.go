@@ -171,3 +171,46 @@ func TestMachines_ConcurrentRegistersAllButOneClosed(t *testing.T) {
 		t.Errorf("registry holds a Conn we did not register")
 	}
 }
+
+// M3 acceptance: the machines registry is concurrent-safe under -race.
+func TestMachinesRegistryConcurrentOps(t *testing.T) {
+	const opsPerWorker = 500
+
+	r := NewRegistry()
+	ids := []string{"mach-0", "mach-1", "mach-2", "mach-3"}
+
+	var wg sync.WaitGroup
+	worker := func(fn func(i int)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < opsPerWorker; i++ {
+				fn(i)
+			}
+		}()
+	}
+
+	conns := make([]*fakeConn, len(ids))
+	for i := range conns {
+		conns[i] = newFakeConn(ids[i])
+	}
+
+	worker(func(i int) {
+		id := ids[i%len(ids)]
+		r.Register(id, "Display "+id, "0.0.1", []string{"spawn"}, conns[i%len(conns)])
+	})
+	worker(func(i int) {
+		_, _ = r.Get(ids[i%len(ids)])
+	})
+	worker(func(i int) {
+		r.SetSuspended(ids[i%len(ids)])
+	})
+	worker(func(i int) {
+		_ = r.List()
+	})
+	worker(func(i int) {
+		r.UnregisterByConn(ids[i%len(ids)], conns[i%len(conns)])
+	})
+
+	wg.Wait()
+}

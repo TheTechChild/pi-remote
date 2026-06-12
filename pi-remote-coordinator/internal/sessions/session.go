@@ -19,7 +19,14 @@ type ClientConn interface {
 
 // Session is the coordinator's view of one Pi process running on a daemon.
 type Session struct {
-	mu          sync.RWMutex
+	mu sync.RWMutex
+
+	// publishMu serializes Publish/Broadcast (append + live fan-out)
+	// against AttachWithReplay (replay + attach). Without it a frame
+	// appended between a client's replay and its attach would be neither
+	// replayed nor delivered live — a silent, permanent gap.
+	publishMu sync.Mutex
+
 	SessionID   string
 	MachineID   string
 	Metadata    daemon_coordinator.SessionStartedJsonMetadata
@@ -77,4 +84,52 @@ func (s *Session) GetMetadata() daemon_coordinator.SessionStartedJsonMetadata {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.Metadata
+}
+
+// Publish appends entry to the ring and fans its payload out to every
+// attached client. Publish and AttachWithReplay serialize on the same
+// per-session lock, so a frame can never fall between a client's replay
+// and its first live frame, and is never delivered twice.
+func (s *Session) Publish(entry broker.Entry) {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	s.Ring.Append(entry)
+	for _, c := range s.GetAttachedClients() {
+		c.Send(entry.Payload)
+	}
+}
+
+// Broadcast sends a raw frame to every attached client without touching
+// the ring. Used for coordinator→app control frames (session_state_change,
+// session_ended) that carry no seq and are not replayable. See SPEC.md
+// §§ 8.7, 10.3.
+func (s *Session) Broadcast(raw []byte) {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	for _, c := range s.GetAttachedClients() {
+		c.Send(raw)
+	}
+}
+
+// AttachWithReplay atomically replays ring history into conn and attaches
+// it for live frames. If lastSeq is no longer available in the ring, the
+// frame built by unavailableFrame is sent instead of a backfill and the
+// client transitions straight to live (SPEC.md § 18.4).
+func (s *Session) AttachWithReplay(
+	conn ClientConn,
+	lastSeq uint64,
+	unavailableFrame func(earliestSeq, latestSeq uint64) []byte,
+) (replayed int, ok bool) {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	entries, ok, earliest, latest := s.Ring.Replay(lastSeq)
+	if !ok {
+		conn.Send(unavailableFrame(earliest, latest))
+	} else {
+		for _, e := range entries {
+			conn.Send(e.Payload)
+		}
+	}
+	s.Attach(conn)
+	return len(entries), ok
 }

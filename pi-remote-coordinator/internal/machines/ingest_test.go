@@ -8,8 +8,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 
+	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
 
@@ -408,4 +410,159 @@ func peekType(b []byte) string {
 	}
 	_ = json.NewDecoder(io.LimitReader(bytes.NewReader(b), 1024)).Decode(&m)
 	return m.Type
+}
+
+// captureClient is a sessions.ClientConn recording every forwarded frame.
+type captureClient struct {
+	id string
+
+	mu     sync.Mutex
+	frames [][]byte
+}
+
+func (c *captureClient) ID() string { return c.id }
+
+func (c *captureClient) Send(msg []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cp := make([]byte, len(msg))
+	copy(cp, msg)
+	c.frames = append(c.frames, cp)
+}
+
+func (c *captureClient) collected() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([][]byte, len(c.frames))
+	copy(out, c.frames)
+	return out
+}
+
+// attachClient attaches a capture client to a registered session.
+func (h *testHarness) attachClient(t *testing.T, sessionID, connID string) *captureClient {
+	t.Helper()
+	s, ok := h.sessions.Get(sessionID)
+	if !ok {
+		t.Fatalf("session %q not registered", sessionID)
+	}
+	c := &captureClient{id: connID}
+	s.Attach(c)
+	return c
+}
+
+// session_state_change must be forwarded to attached clients in the
+// coordinator-app shape: machine_id added, seq/ts dropped (SPEC.md § 10.3).
+func TestIngest_SessionStateChange_ForwardedToAttached(t *testing.T) {
+	h := newHarness(t)
+	h.register(t)
+	mustHandle(t, h.ing, h.conn, frame(t, sessionStartedFrame("sess-1")))
+	c := h.attachClient(t, "sess-1", "conn-1")
+
+	mustHandle(t, h.ing, h.conn, frame(t, map[string]any{
+		"type":       "session_state_change",
+		"v":          1,
+		"session_id": "sess-1",
+		"seq":        2,
+		"ts":         1700000000,
+		"from":       "running",
+		"to":         "idle",
+	}))
+
+	frames := c.collected()
+	if len(frames) != 1 {
+		t.Fatalf("attached client got %d frames, want 1", len(frames))
+	}
+	// Strict decode through the generated coordinator-app type: enforces
+	// required machine_id and valid enum values.
+	var fwd coordinator_app.SessionStateChangeJson
+	if err := json.Unmarshal(frames[0], &fwd); err != nil {
+		t.Fatalf("forwarded frame is not coordinator-app session_state_change: %v\n%s", err, frames[0])
+	}
+	if fwd.MachineId != "macbook-pro" || fwd.SessionId != "sess-1" ||
+		string(fwd.From) != "running" || string(fwd.To) != "idle" {
+		t.Errorf("unexpected forwarded frame: %s", frames[0])
+	}
+	var loose map[string]any
+	_ = json.Unmarshal(frames[0], &loose)
+	if _, hasSeq := loose["seq"]; hasSeq {
+		t.Errorf("coordinator-app session_state_change must not carry seq: %s", frames[0])
+	}
+}
+
+// session_ended must be forwarded to attached clients with machine_id
+// added (SPEC.md § 10.3).
+func TestIngest_SessionEnded_ForwardedToAttached(t *testing.T) {
+	h := newHarness(t)
+	h.register(t)
+	mustHandle(t, h.ing, h.conn, frame(t, sessionStartedFrame("sess-1")))
+	c := h.attachClient(t, "sess-1", "conn-1")
+
+	mustHandle(t, h.ing, h.conn, frame(t, map[string]any{
+		"type":       "session_ended",
+		"v":          1,
+		"session_id": "sess-1",
+		"seq":        3,
+		"reason":     "process_exit",
+	}))
+
+	frames := c.collected()
+	if len(frames) != 1 {
+		t.Fatalf("attached client got %d frames, want 1", len(frames))
+	}
+	var fwd coordinator_app.SessionEndedJson
+	if err := json.Unmarshal(frames[0], &fwd); err != nil {
+		t.Fatalf("forwarded frame is not coordinator-app session_ended: %v\n%s", err, frames[0])
+	}
+	if fwd.MachineId != "macbook-pro" || fwd.SessionId != "sess-1" ||
+		string(fwd.Reason) != "process_exit" {
+		t.Errorf("unexpected forwarded frame: %s", frames[0])
+	}
+}
+
+// machine_suspending must broadcast paused state changes to clients
+// attached to that machine's sessions (via PauseAllForMachine).
+func TestIngest_MachineSuspending_ForwardedToAttached(t *testing.T) {
+	h := newHarness(t)
+	h.register(t)
+	mustHandle(t, h.ing, h.conn, frame(t, sessionStartedFrame("sess-1")))
+	c := h.attachClient(t, "sess-1", "conn-1")
+
+	mustHandle(t, h.ing, h.conn, frame(t, map[string]any{
+		"type": "machine_suspending",
+		"v":    1,
+	}))
+
+	frames := c.collected()
+	if len(frames) != 1 {
+		t.Fatalf("attached client got %d frames, want 1", len(frames))
+	}
+	var fwd coordinator_app.SessionStateChangeJson
+	if err := json.Unmarshal(frames[0], &fwd); err != nil {
+		t.Fatalf("broadcast frame is not coordinator-app session_state_change: %v\n%s", err, frames[0])
+	}
+	if string(fwd.To) != "paused" || fwd.MachineId != "macbook-pro" {
+		t.Errorf("unexpected broadcast frame: %s", frames[0])
+	}
+}
+
+// session_event publishes atomically to ring + attached clients.
+func TestIngest_SessionEvent_FannedOutToAttached(t *testing.T) {
+	h := newHarness(t)
+	h.register(t)
+	mustHandle(t, h.ing, h.conn, frame(t, sessionStartedFrame("sess-1")))
+	c := h.attachClient(t, "sess-1", "conn-1")
+
+	raw := frame(t, sessionEventFrame("sess-1", 1))
+	mustHandle(t, h.ing, h.conn, raw)
+
+	frames := c.collected()
+	if len(frames) != 1 || !bytes.Equal(frames[0], raw) {
+		t.Fatalf("attached client frames = %q, want the raw session_event passed through", frames)
+	}
+
+	// Stale seq: neither ring nor clients see it again.
+	mustHandle(t, h.ing, h.conn, frame(t, sessionEventFrame("sess-1", 1)))
+	if got := len(c.collected()); got != 1 {
+		t.Errorf("stale seq was fanned out: %d frames, want 1", got)
+	}
 }

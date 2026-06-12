@@ -1431,8 +1431,10 @@ If a session becomes "active" again (`LastTouched` updated), its `maxBytes` is a
 When a client `attach`es with `last_seq = N`:
 
 1. If `N == 0`: stream all entries in the ring in seq order, then transition to live.
-2. If `N >= ring.earliestSeq`: stream entries from `seq > N`, then live.
-3. If `N < ring.earliestSeq`: send `replay_unavailable` with `earliest_available_seq` and `current_seq`, then transition to live (no backfill).
+2. If `N + 1 >= ring.earliestSeq`: stream entries from `seq > N`, then live. (The first entry the client needs is `N + 1`; as long as that entry is still in the ring there is no gap, including the boundary case `N == earliestSeq - 1`.)
+3. If `N + 1 < ring.earliestSeq`: send `replay_unavailable` with `earliest_available_seq` and `current_seq`, then transition to live (no backfill).
+
+A ring whose entries have all been evicted preserves its seq window as `earliestSeq = latestSeq + 1`, so a stale `attach` still produces `replay_unavailable` rather than a silent gap, while an attach at `N == latestSeq` replays cleanly (zero entries).
 
 The phone's UI shows a "history not available" banner when `replay_unavailable` is received, but the terminal view still displays whatever output arrives live. The user can still interact.
 

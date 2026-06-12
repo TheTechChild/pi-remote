@@ -61,14 +61,6 @@ func (r *RingBuffer) Append(entry Entry) {
 		r.Tail = (r.Tail + 1) % len(r.Entries)
 	}
 
-	if r.Tail == r.Head {
-		r.Bytes = 0
-		r.EarliestSeq = 0
-		r.LatestSeq = 0
-	} else {
-		r.EarliestSeq = r.Entries[r.Tail].Seq
-	}
-
 	// Append the new entry
 	if len(r.Entries) == 0 {
 		r.Entries = make([]Entry, 128)
@@ -91,12 +83,12 @@ func (r *RingBuffer) Append(entry Entry) {
 	}
 
 	r.Entries[r.Head] = entry
-	r.LatestSeq = entry.Seq
-	r.Bytes += entrySize
-	if r.EarliestSeq == 0 {
-		r.EarliestSeq = entry.Seq
-	}
 	r.Head = (r.Head + 1) % len(r.Entries)
+	r.Bytes += entrySize
+	r.LatestSeq = entry.Seq
+	// The ring is guaranteed non-empty here, so Tail always points at the
+	// oldest live entry.
+	r.EarliestSeq = r.Entries[r.Tail].Seq
 	r.LastTouched = time.Now()
 }
 
@@ -108,12 +100,17 @@ func (r *RingBuffer) evictLocked() {
 		r.Tail = (r.Tail + 1) % len(r.Entries)
 	}
 	if r.Tail == r.Head {
+		// Fully evicted. Preserve the seq window (earliest = latest+1) so
+		// Replay can still distinguish "nothing ever appended" from
+		// "history dropped" and produce replay_unavailable for stale
+		// attaches instead of a silent gap.
 		r.Bytes = 0
-		r.EarliestSeq = 0
-		r.LatestSeq = 0
-	} else {
-		r.EarliestSeq = r.Entries[r.Tail].Seq
+		if r.LatestSeq != 0 {
+			r.EarliestSeq = r.LatestSeq + 1
+		}
+		return
 	}
+	r.EarliestSeq = r.Entries[r.Tail].Seq
 }
 
 // AllEntries returns a copy of all entries in chronological order.
@@ -125,7 +122,7 @@ func (r *RingBuffer) AllEntries() []Entry {
 
 // AllEntriesLocked returns a copy of all entries in chronological order (caller must hold lock).
 func (r *RingBuffer) AllEntriesLocked() []Entry {
-	if r.Bytes == 0 || len(r.Entries) == 0 {
+	if r.Head == r.Tail || len(r.Entries) == 0 {
 		return nil
 	}
 	res := make([]Entry, 0)
@@ -157,7 +154,9 @@ func (r *RingBuffer) Replay(lastSeq uint64) (entries []Entry, ok bool, earliestS
 		return r.AllEntriesLocked(), true, earliestSeq, latestSeq
 	}
 
-	if lastSeq < earliestSeq {
+	// A gap exists iff the first entry the client needs (lastSeq+1)
+	// precedes the earliest entry still in the ring. See SPEC.md § 18.4.
+	if lastSeq+1 < earliestSeq {
 		return nil, false, earliestSeq, latestSeq
 	}
 
@@ -188,12 +187,19 @@ func BalanceGlobalLRU(items []LRUItem, activeSessionID string, totalCap int64, f
 		item.Ring.mu.Unlock()
 	}
 
-	// Grow active session if total cache is under 80% capacity (40MB)
+	// Grow active session if total cache is under 80% capacity (40MB).
+	// MaxBytes is clamped at totalCap: growing a single ring beyond the
+	// global budget is meaningless and would otherwise compound 10% per
+	// append without bound.
 	if totalBytes < int64(float64(totalCap)*0.8) {
 		for _, item := range items {
 			if item.SessionID == activeSessionID {
 				item.Ring.mu.Lock()
-				item.Ring.MaxBytes = int64(float64(item.Ring.MaxBytes) * 1.1)
+				grown := int64(float64(item.Ring.MaxBytes) * 1.1)
+				if grown > totalCap {
+					grown = totalCap
+				}
+				item.Ring.MaxBytes = grown
 				item.Ring.mu.Unlock()
 				break
 			}
