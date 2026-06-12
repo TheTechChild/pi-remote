@@ -35,6 +35,16 @@ pi-remote-android/*.aab
 .venv/
 __pycache__/
 
+# Root-level debug artifacts from manual test sessions (screenshots, logs,
+# harness credentials, adb UI dumps). Scoped to the repo root on purpose so
+# committed assets deeper in the tree (e.g. Android icons) are unaffected.
+/*.log
+/*.png
+/window_dump.xml
+/pi-remote-test-id
+/pi-remote-test-secret
+/tmux-path.txt
+
 # Editor / OS
 .DS_Store
 .idea/
