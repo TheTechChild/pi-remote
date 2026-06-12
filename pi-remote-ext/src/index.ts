@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-import { uuidv7 } from "./uuidv7.js";
 import { hostname } from "node:os";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +9,7 @@ import type { Disconnect } from "./proto/extension-daemon/disconnect.js";
 import type { Event } from "./proto/extension-daemon/event.js";
 import { buildRegister, registerWithDaemon } from "./register.js";
 import { DaemonSocket, type DaemonSocketOptions } from "./socket.js";
+import { uuidv7 } from "./uuidv7.js";
 
 const NAME = "pi-remote-ext" as const;
 const TMUX_TARGET_PLACEHOLDER = "untmuxed:0.0";
