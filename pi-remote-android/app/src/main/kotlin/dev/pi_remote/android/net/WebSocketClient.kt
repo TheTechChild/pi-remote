@@ -41,6 +41,11 @@ class WebSocketClient(
     private val writeChannel = Channel<String>(Channel.UNLIMITED)
     private var writeJob: Job? = null
 
+    // client_id sent in client_hello. Defaults to the stub-auth fixture;
+    // MainActivity overrides it with the push-registered id when one
+    // exists (SPEC § 19.2 step 7).
+    @Volatile var clientId: String = "test-client-1"
+
     // Reconnection variables
     private var reconnectDelayMs = 1000L
     private val maxReconnectDelayMs = 60000L
@@ -249,7 +254,7 @@ class WebSocketClient(
             _connectionStatus.value = ConnectionStatus.CONNECTED
             resetReconnectDelay()
             // Auto-send registration once connected in Batch-5 mode
-            sendClientHello("test-client-1")
+            sendClientHello(clientId)
             subscribeMachineList()
         }
 
