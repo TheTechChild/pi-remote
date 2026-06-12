@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +9,7 @@ import type { Disconnect } from "./proto/extension-daemon/disconnect.js";
 import type { Event } from "./proto/extension-daemon/event.js";
 import { buildRegister, registerWithDaemon } from "./register.js";
 import { DaemonSocket, type DaemonSocketOptions } from "./socket.js";
+import { uuidv7 } from "./uuidv7.js";
 
 const NAME = "pi-remote-ext" as const;
 const TMUX_TARGET_PLACEHOLDER = "untmuxed:0.0";
@@ -45,7 +45,7 @@ export default function piRemoteExtensionFactory(
   opts: PiRemoteFactoryOptions = {},
 ): PiRemoteExtensionInstance {
   const log = ctx?.log ?? ((msg: string) => console.log(`[${NAME}] ${msg}`));
-  const sessionId = randomUUID();
+  const sessionId = uuidv7(); // D17: time-ordered session ids (#46)
   const startedAt = Date.now();
   const cwd = ctx?.cwd ?? process.cwd();
   const pid = ctx?.pid ?? process.pid;
