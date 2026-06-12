@@ -101,7 +101,7 @@ object Notifications {
             context,
             reasonChannel[payload.reason] ?: CHANNEL_INFO,
         )
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setSmallIcon(dev.pi_remote.android.R.drawable.ic_notification)
             .setContentTitle("${payload.machineDisplayName} · $project")
             .setContentText(payload.summary)
             .setSubText(reasonHuman[payload.reason] ?: payload.reason)
