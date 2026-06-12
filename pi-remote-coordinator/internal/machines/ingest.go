@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/TheTechChild/pi-remote-coordinator/internal/broker"
+	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
 	daemon_coordinator "github.com/TheTechChild/pi-remote-coordinator/internal/proto/daemon-coordinator"
 	"github.com/TheTechChild/pi-remote-coordinator/internal/sessions"
 )
@@ -214,20 +215,15 @@ func (i *Ingestor) handleSessionEvent(b []byte) error {
 		return nil
 	}
 
-	entry := broker.Entry{
+	// daemon-coordinator and coordinator-app session_event schemas are
+	// identical, so the raw daemon frame is forwarded as-is (ring +
+	// attached clients, atomically; SPEC.md § 8.7).
+	i.sessions.Publish(msg.SessionId, broker.Entry{
 		Seq:     uint64(msg.Seq),
 		Kind:    broker.EntryKindEvent,
 		Ts:      int64(msg.Ts),
 		Payload: b,
-	}
-	i.sessions.AppendToRing(msg.SessionId, entry)
-
-	if s, ok := i.sessions.Get(msg.SessionId); ok {
-		clients := s.GetAttachedClients()
-		for _, c := range clients {
-			c.Send(b)
-		}
-	}
+	})
 	return nil
 }
 
@@ -243,20 +239,13 @@ func (i *Ingestor) handleSessionPty(b []byte) error {
 		return nil
 	}
 
-	entry := broker.Entry{
+	// Schemas are pass-through compatible; see handleSessionEvent.
+	i.sessions.Publish(msg.SessionId, broker.Entry{
 		Seq:     uint64(msg.Seq),
 		Kind:    broker.EntryKindPty,
 		Ts:      int64(msg.Ts),
 		Payload: b,
-	}
-	i.sessions.AppendToRing(msg.SessionId, entry)
-
-	if s, ok := i.sessions.Get(msg.SessionId); ok {
-		clients := s.GetAttachedClients()
-		for _, c := range clients {
-			c.Send(b)
-		}
-	}
+	})
 	return nil
 }
 
@@ -267,10 +256,35 @@ func (i *Ingestor) handleSessionStateChange(b []byte) error {
 	}
 	i.sessions.SetState(msg.SessionId, string(msg.To))
 	i.sessions.AdvanceSeq(msg.SessionId, msg.Seq)
+	i.forwardStateChange(msg.SessionId, string(msg.From), string(msg.To))
 	i.log.Info("session_state_change",
 		"session_id", msg.SessionId, "from", string(msg.From), "to", string(msg.To))
 	i.notifyChange()
 	return nil
+}
+
+// forwardStateChange builds the coordinator-app session_state_change frame
+// (machine_id added, seq/ts dropped per the coordinator-app schema) and
+// broadcasts it to the session's attached clients. SPEC.md §§ 8.7, 10.3.
+func (i *Ingestor) forwardStateChange(sessionID, from, to string) {
+	s, ok := i.sessions.Get(sessionID)
+	if !ok {
+		return
+	}
+	frame := coordinator_app.SessionStateChangeJson{
+		Type:      "session_state_change",
+		V:         1,
+		SessionId: sessionID,
+		MachineId: s.MachineID,
+		From:      coordinator_app.State(from),
+		To:        coordinator_app.State(to),
+	}
+	b, err := json.Marshal(frame)
+	if err != nil {
+		i.log.Error("forwardStateChange marshal", "err", err)
+		return
+	}
+	s.Broadcast(b)
 }
 
 func (i *Ingestor) handleSessionEnded(b []byte) error {
@@ -280,6 +294,22 @@ func (i *Ingestor) handleSessionEnded(b []byte) error {
 	}
 	i.sessions.AdvanceSeq(msg.SessionId, msg.Seq)
 	i.sessions.MarkEnded(msg.SessionId)
+	if s, ok := i.sessions.Get(msg.SessionId); ok {
+		// Forward to attached clients with machine_id added (the
+		// coordinator-app schema drops seq). SPEC.md §§ 8.7, 10.3.
+		frame := coordinator_app.SessionEndedJson{
+			Type:      "session_ended",
+			V:         1,
+			SessionId: msg.SessionId,
+			MachineId: s.MachineID,
+			Reason:    coordinator_app.SessionEndedJsonReason(msg.Reason),
+		}
+		if fb, err := json.Marshal(frame); err == nil {
+			s.Broadcast(fb)
+		} else {
+			i.log.Error("session_ended forward marshal", "err", err)
+		}
+	}
 	i.log.Info("session_ended",
 		"session_id", msg.SessionId, "reason", string(msg.Reason))
 	i.notifyChange()

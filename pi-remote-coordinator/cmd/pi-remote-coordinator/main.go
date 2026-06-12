@@ -70,7 +70,7 @@ func main() {
 	deps := httpapi.Deps{
 		Auth:     mw,
 		Machines: machines.NewRegistry(),
-		Sessions: sessions.NewRegistry(),
+		Sessions: sessions.NewRegistryWithLimits(cfg.Broker.TotalCacheBytes, cfg.Broker.SessionCacheFloorBytes),
 		Clients:  clients.NewRegistry(clientOpts...),
 		Logger:   logger,
 	}

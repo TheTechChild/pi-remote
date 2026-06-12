@@ -316,36 +316,27 @@ func (h *clientWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				attachedSession = nil
 			}
 
-			// Replay history logic
-			entries, okRange, earliest, latest := s.Ring.Replay(uint64(attach.LastSeq))
-			if !okRange {
-				// Dispatch replay_unavailable control frame before switching to live
-				ru := coordinator_app.ReplayUnavailableJson{
-					Type:                 "replay_unavailable",
-					V:                    1,
-					SessionId:            s.SessionID,
-					EarliestAvailableSeq: int(earliest),
-					CurrentSeq:           int(latest),
-				}
-				ruBytes, _ := json.Marshal(ru)
-				select {
-				case sendChan <- ruBytes:
-				default:
-				}
-			} else {
-				// Replay matching history
-				for _, entry := range entries {
-					select {
-					case sendChan <- entry.Payload:
-					default:
+			// Replay + attach atomically: frames published while we replay
+			// can neither be missed nor double-delivered (SPEC.md § 18.4).
+			replayed, okRange := s.AttachWithReplay(
+				&attachedClient{id: connID, sendChan: sendChan},
+				uint64(attach.LastSeq),
+				func(earliest, latest uint64) []byte {
+					ru := coordinator_app.ReplayUnavailableJson{
+						Type:                 "replay_unavailable",
+						V:                    1,
+						SessionId:            s.SessionID,
+						EarliestAvailableSeq: int(earliest),
+						CurrentSeq:           int(latest),
 					}
-				}
-			}
-
-			// Attach to receive live frames
-			s.Attach(&attachedClient{id: connID, sendChan: sendChan})
+					ruBytes, _ := json.Marshal(ru)
+					return ruBytes
+				},
+			)
 			attachedSession = s
-			h.log.Info("client attached to session", "client_id", hello.ClientId, "session_id", s.SessionID)
+			h.log.Info("client attached to session",
+				"client_id", hello.ClientId, "session_id", s.SessionID,
+				"replayed", replayed, "replay_ok", okRange)
 
 		case "detach":
 			var detach coordinator_app.DetachJson

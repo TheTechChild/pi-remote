@@ -205,8 +205,8 @@ func TestClientWS_AttachAndReplay(t *testing.T) {
 	// Append some entries
 	entry1 := broker.Entry{Seq: 1, Kind: broker.EntryKindPty, Ts: time.Now().Unix(), Payload: []byte(`{"type":"session_pty","seq":1,"session_id":"sess-test-1","bytes":"aGVsbG8=","ts":0,"v":1}`)}
 	entry2 := broker.Entry{Seq: 2, Kind: broker.EntryKindPty, Ts: time.Now().Unix(), Payload: []byte(`{"type":"session_pty","seq":2,"session_id":"sess-test-1","bytes":"d29ybGQ=","ts":0,"v":1}`)}
-	ts.sessions.AppendToRing("sess-test-1", entry1)
-	ts.sessions.AppendToRing("sess-test-1", entry2)
+	ts.sessions.Publish("sess-test-1", entry1)
+	ts.sessions.Publish("sess-test-1", entry2)
 
 	// Connect client
 	conn, _, err := dialClient(t, ts, "test-jwt-clayton")
@@ -265,7 +265,7 @@ func TestClientWS_AttachAndReplay(t *testing.T) {
 	if !advanced {
 		t.Fatal("AdvanceSeq failed")
 	}
-	ts.sessions.AppendToRing("sess-test-1", entry3)
+	ts.sessions.Publish("sess-test-1", entry3)
 	clients := sess.GetAttachedClients()
 	for _, c := range clients {
 		c.Send(entry3.Payload)
@@ -294,9 +294,13 @@ func TestClientWS_AttachReplayUnavailable(t *testing.T) {
 
 	entry1 := broker.Entry{Seq: 1, Kind: broker.EntryKindPty, Payload: []byte(`{"type":"session_pty","seq":1,"session_id":"sess-test-2","bytes":"aGVsbG8=","ts":0,"v":1}`)}
 	entry2 := broker.Entry{Seq: 2, Kind: broker.EntryKindPty, Payload: []byte(`{"type":"session_pty","seq":2,"session_id":"sess-test-2","bytes":"d29ybGQ=","ts":0,"v":1}`)}
+	entry3 := broker.Entry{Seq: 3, Kind: broker.EntryKindPty, Payload: []byte(`{"type":"session_pty","seq":3,"session_id":"sess-test-2","bytes":"ISEh","ts":0,"v":1}`)}
 
-	ts.sessions.AppendToRing("sess-test-2", entry1) // will be evicted when 2 is appended
-	ts.sessions.AppendToRing("sess-test-2", entry2)
+	// Each payload alone exceeds MaxBytes=15, so every append evicts its
+	// predecessor; after the third publish only seq 3 remains.
+	ts.sessions.Publish("sess-test-2", entry1)
+	ts.sessions.Publish("sess-test-2", entry2)
+	ts.sessions.Publish("sess-test-2", entry3)
 
 	// Connect client
 	conn, _, err := dialClient(t, ts, "test-jwt-clayton")
@@ -316,7 +320,9 @@ func TestClientWS_AttachReplayUnavailable(t *testing.T) {
 		t.Fatalf("write client_hello: %v", err)
 	}
 
-	// Send attach requesting last_seq = 1 (which is < earliestSeq = 2)
+	// Send attach requesting last_seq = 1. The client needs seq 2 next,
+	// but the ring's earliest entry is seq 3 — a genuine gap, so the
+	// coordinator must respond with replay_unavailable (SPEC.md § 18.4).
 	attachMsg, _ := json.Marshal(map[string]any{
 		"type":       "attach",
 		"v":          1,
@@ -390,7 +396,7 @@ func TestClientWS_Detach(t *testing.T) {
 
 	// Send live entry
 	entry := broker.Entry{Seq: 1, Kind: broker.EntryKindPty, Payload: []byte(`{"type":"session_pty","seq":1,"session_id":"sess-test-3","bytes":"aGVsbG8=","ts":0,"v":1}`)}
-	ts.sessions.AppendToRing("sess-test-3", entry)
+	ts.sessions.Publish("sess-test-3", entry)
 	clients := sess.GetAttachedClients()
 	for _, c := range clients {
 		c.Send(entry.Payload)

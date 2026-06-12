@@ -2,11 +2,20 @@
 package sessions
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/TheTechChild/pi-remote-coordinator/internal/broker"
+	coordinator_app "github.com/TheTechChild/pi-remote-coordinator/internal/proto/coordinator-app"
 	daemon_coordinator "github.com/TheTechChild/pi-remote-coordinator/internal/proto/daemon-coordinator"
+)
+
+// Defaults per SPEC.md § 18.1; production wiring should pass the configured
+// values via NewRegistryWithLimits (config [broker] section, SPEC.md § 8.3).
+const (
+	defaultTotalCacheBytes        = 50 * 1024 * 1024
+	defaultSessionCacheFloorBytes = 1 * 1024 * 1024
 )
 
 // Registry is an in-memory map of sessions, safe for concurrent use.
@@ -14,14 +23,45 @@ type Registry struct {
 	mu  sync.RWMutex
 	m   map[string]*Session
 	now func() time.Time // injectable for tests; defaults to time.Now
+
+	totalCacheBytes        int64 // global ring budget (SPEC.md § 18.1)
+	sessionCacheFloorBytes int64 // per-session eviction floor
 }
 
-// NewRegistry constructs an empty Registry.
+// NewRegistry constructs an empty Registry with SPEC.md § 18.1 default
+// cache sizing (50MB total, 1MB floor).
 func NewRegistry() *Registry {
-	return &Registry{
-		m:   make(map[string]*Session),
-		now: time.Now,
+	return NewRegistryWithLimits(defaultTotalCacheBytes, defaultSessionCacheFloorBytes)
+}
+
+// NewRegistryWithLimits constructs an empty Registry with explicit broker
+// cache sizing, normally from config [broker] (SPEC.md § 8.3). Non-positive
+// values fall back to the SPEC defaults.
+func NewRegistryWithLimits(totalCacheBytes, sessionCacheFloorBytes int64) *Registry {
+	if totalCacheBytes <= 0 {
+		totalCacheBytes = defaultTotalCacheBytes
 	}
+	if sessionCacheFloorBytes <= 0 {
+		sessionCacheFloorBytes = defaultSessionCacheFloorBytes
+	}
+	return &Registry{
+		m:                      make(map[string]*Session),
+		now:                    time.Now,
+		totalCacheBytes:        totalCacheBytes,
+		sessionCacheFloorBytes: sessionCacheFloorBytes,
+	}
+}
+
+// initialRingMaxBytes is the starting per-session ring budget: a tenth of
+// the global cap (≈ the "~5MB per session at full saturation" sizing from
+// SPEC.md § 18.1), never below the eviction floor. BalanceGlobalLRU grows
+// or shrinks it from there.
+func (r *Registry) initialRingMaxBytes() int64 {
+	initial := r.totalCacheBytes / 10
+	if initial < r.sessionCacheFloorBytes {
+		initial = r.sessionCacheFloorBytes
+	}
+	return initial
 }
 
 // Register creates or replaces a session entry. State defaults to "running",
@@ -38,7 +78,7 @@ func (r *Registry) Register(sessionID, machineID string, metadata daemon_coordin
 		LastSeq:         0,
 		Ended:           false,
 		LastTouched:     now,
-		Ring:            broker.NewRingBuffer(5 * 1024 * 1024), // 5MB starting MaxBytes
+		Ring:            broker.NewRingBuffer(r.initialRingMaxBytes()),
 		AttachedClients: make(map[string]ClientConn),
 	}
 	r.m[sessionID] = s
@@ -103,24 +143,35 @@ func (r *Registry) MarkEnded(sessionID string) {
 }
 
 // PauseAllForMachine flips every non-ended session belonging to machineID
-// to State="paused". Ended sessions are skipped.
+// to State="paused" and broadcasts a session_state_change frame to each
+// session's attached clients (SPEC.md §§ 8.7, 10.3). Ended and already-
+// paused sessions are skipped.
 func (r *Registry) PauseAllForMachine(machineID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
 	for _, s := range r.m {
 		s.mu.Lock()
-		if s.MachineID != machineID {
+		if s.MachineID != machineID || s.Ended || s.State == "paused" {
 			s.mu.Unlock()
 			continue
 		}
-		if s.Ended {
-			s.mu.Unlock()
-			continue
-		}
+		from := s.State
 		s.State = "paused"
 		s.LastTouched = now
 		s.mu.Unlock()
+
+		frame := coordinator_app.SessionStateChangeJson{
+			Type:      "session_state_change",
+			V:         1,
+			SessionId: s.SessionID,
+			MachineId: machineID,
+			From:      coordinator_app.State(from),
+			To:        coordinator_app.StatePaused,
+		}
+		if b, err := json.Marshal(frame); err == nil {
+			s.Broadcast(b)
+		}
 	}
 }
 
@@ -156,8 +207,12 @@ func (r *Registry) LRUItems() []broker.LRUItem {
 	return items
 }
 
-// AppendToRing appends an entry to a session's RingBuffer and triggers Global LRU balancing.
-func (r *Registry) AppendToRing(sessionID string, entry broker.Entry) {
+// Publish appends an entry to a session's RingBuffer, fans it out to the
+// session's attached clients, and triggers Global LRU balancing. The
+// append + fan-out pair is atomic with respect to AttachWithReplay (see
+// Session.Publish), so attaching clients never miss or double-receive a
+// frame.
+func (r *Registry) Publish(sessionID string, entry broker.Entry) {
 	r.mu.RLock()
 	s, ok := r.m[sessionID]
 	r.mu.RUnlock()
@@ -165,15 +220,12 @@ func (r *Registry) AppendToRing(sessionID string, entry broker.Entry) {
 		return
 	}
 
-	// 1. Append entry to session's ring buffer
-	s.Ring.Append(entry)
+	s.Publish(entry)
 	s.mu.Lock()
-	s.LastTouched = time.Now()
+	s.LastTouched = r.now()
 	s.mu.Unlock()
 
-	// 2. Perform Global LRU balancing
-	items := r.LRUItems()
-	broker.BalanceGlobalLRU(items, sessionID, 50*1024*1024, 1*1024*1024)
+	broker.BalanceGlobalLRU(r.LRUItems(), sessionID, r.totalCacheBytes, r.sessionCacheFloorBytes)
 }
 
 // List returns a snapshot of all registered sessions.

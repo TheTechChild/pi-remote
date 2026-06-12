@@ -3,6 +3,8 @@ package broker_test
 
 import (
 	"bytes"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -186,9 +188,204 @@ func TestBalanceGlobalLRU(t *testing.T) {
 
 	// Now let's test growth:
 	// Total bytes is now 50. 50 is under 80% of total cap 80 (80% of 80 = 64).
-	// When we balance again with active session s3, ring3's maxBytes should grow by 10% (100 -> 110).
+	// When we balance again with active session s3, ring3's maxBytes grows
+	// by 10% (100 -> 110) but is clamped at the global cap (80): a single
+	// ring can never out-budget the whole broker.
 	broker.BalanceGlobalLRU(items, "s3", 80, 10)
-	if ring3.MaxBytes != 110 {
-		t.Errorf("expected active session ring3 maxBytes to grow to 110, got %d", ring3.MaxBytes)
+	if ring3.MaxBytes != 80 {
+		t.Errorf("expected active session ring3 maxBytes to grow to the 80 cap, got %d", ring3.MaxBytes)
+	}
+
+	// With a cap that leaves headroom, growth is the plain 10% step.
+	broker.BalanceGlobalLRU(items, "s3", 1000, 10)
+	if ring3.MaxBytes != 88 {
+		t.Errorf("expected active session ring3 maxBytes to grow to 88, got %d", ring3.MaxBytes)
+	}
+}
+
+// A ring whose entries have all been evicted must preserve its seq window
+// (earliest = latest+1) so stale attaches produce replay_unavailable
+// instead of a silent gap.
+func TestRingBufferEvictionToEmptyPreservesSeqWindow(t *testing.T) {
+	ring := broker.NewRingBuffer(100)
+	for i := 1; i <= 5; i++ {
+		ring.Append(broker.Entry{Seq: uint64(i), Kind: broker.EntryKindPty, Payload: make([]byte, 10)})
+	}
+
+	// Shrink to zero via the global LRU (floor 0 permits full eviction).
+	items := []broker.LRUItem{{SessionID: "s1", LastTouched: time.Now(), Ring: ring}}
+	broker.BalanceGlobalLRU(items, "", 0, 0)
+
+	if ring.Bytes != 0 {
+		t.Fatalf("expected fully evicted ring, got %d bytes", ring.Bytes)
+	}
+
+	// Client current at the latest seq: nothing missed, clean (empty) replay.
+	entries, ok, earliest, latest := ring.Replay(5)
+	if !ok {
+		t.Errorf("Replay(5) ok=false, want true (no gap at the window edge)")
+	}
+	if len(entries) != 0 {
+		t.Errorf("Replay(5) returned %d entries, want 0", len(entries))
+	}
+	if earliest != 6 || latest != 5 {
+		t.Errorf("seq window = (earliest=%d, latest=%d), want (6, 5)", earliest, latest)
+	}
+
+	// Client behind the evicted window: genuine gap.
+	if _, ok, _, _ := ring.Replay(3); ok {
+		t.Errorf("Replay(3) ok=true, want false (entries 4-5 were dropped)")
+	}
+}
+
+// last_seq exactly one below the ring's earliest entry is NOT a gap: the
+// first frame the client needs is still present. See SPEC.md § 18.4.
+func TestRingBufferReplayBoundaryNoGap(t *testing.T) {
+	ring := broker.NewRingBuffer(15)
+	ring.Append(broker.Entry{Seq: 1, Kind: broker.EntryKindPty, Payload: make([]byte, 10)})
+	ring.Append(broker.Entry{Seq: 2, Kind: broker.EntryKindPty, Payload: make([]byte, 10)}) // evicts seq 1
+
+	entries, ok, earliest, _ := ring.Replay(1)
+	if earliest != 2 {
+		t.Fatalf("earliest = %d, want 2", earliest)
+	}
+	if !ok {
+		t.Fatalf("Replay(1) ok=false, want true: seq 2 is the next needed frame and it is present")
+	}
+	if len(entries) != 1 || entries[0].Seq != 2 {
+		t.Fatalf("Replay(1) = %v, want exactly seq 2", entries)
+	}
+}
+
+// Zero-length payloads are legal entries and must not confuse the
+// empty-ring bookkeeping (which is positional, not byte-based).
+func TestRingBufferZeroLengthPayload(t *testing.T) {
+	ring := broker.NewRingBuffer(100)
+	ring.Append(broker.Entry{Seq: 1, Kind: broker.EntryKindEvent, Payload: nil})
+	ring.Append(broker.Entry{Seq: 2, Kind: broker.EntryKindEvent, Payload: []byte{}})
+
+	if got := len(ring.AllEntries()); got != 2 {
+		t.Fatalf("AllEntries len = %d, want 2", got)
+	}
+	entries, ok, _, _ := ring.Replay(1)
+	if !ok || len(entries) != 1 || entries[0].Seq != 2 {
+		t.Fatalf("Replay(1) = (%v, %v), want seq 2 only", entries, ok)
+	}
+}
+
+// M4 acceptance: stress with concurrent producers and consumers. One
+// producer per ring (matching the one-daemon-conn-per-session model),
+// concurrent Replay readers, and a concurrent LRU balancer. Every replay
+// snapshot must be internally consistent: strictly ascending, contiguous,
+// and bounded by the advertised window. Run under -race.
+func TestRingBufferConcurrentStress(t *testing.T) {
+	const (
+		numRings   = 8
+		numAppends = 2000
+		numReaders = 4
+	)
+
+	rings := make([]*broker.RingBuffer, numRings)
+	items := make([]broker.LRUItem, numRings)
+	for i := range rings {
+		rings[i] = broker.NewRingBuffer(4096)
+		items[i] = broker.LRUItem{
+			SessionID:   string(rune('a' + i)),
+			LastTouched: time.Now(),
+			Ring:        rings[i],
+		}
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Producers: one per ring, contiguous seqs.
+	for _, ring := range rings {
+		wg.Add(1)
+		go func(r *broker.RingBuffer) {
+			defer wg.Done()
+			for seq := 1; seq <= numAppends; seq++ {
+				r.Append(broker.Entry{
+					Seq:     uint64(seq),
+					Kind:    broker.EntryKindPty,
+					Payload: make([]byte, 64),
+				})
+			}
+		}(ring)
+	}
+
+	// Balancer: races against producers, like Registry.Publish does. Not
+	// part of wg — it runs until everything else is done, then is stopped.
+	balancerDone := make(chan struct{})
+	go func() {
+		defer close(balancerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				broker.BalanceGlobalLRU(items, "a", 16*1024, 1024)
+			}
+		}
+	}()
+
+	// Readers: replay from random offsets, validating snapshot invariants.
+	errCh := make(chan error, numReaders)
+	for r := 0; r < numReaders; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				ring := rings[i%numRings]
+				entries, ok, earliest, latest := ring.Replay(uint64(i % numAppends))
+				if !ok {
+					continue
+				}
+				prev := uint64(0)
+				for _, e := range entries {
+					if prev != 0 && e.Seq != prev+1 {
+						errCh <- fmt.Errorf("non-contiguous replay: %d after %d", e.Seq, prev)
+						return
+					}
+					if e.Seq < earliest || e.Seq > latest {
+						errCh <- fmt.Errorf("seq %d outside window [%d, %d]", e.Seq, earliest, latest)
+						return
+					}
+					prev = e.Seq
+				}
+			}
+		}()
+	}
+
+	// Wait for producers+readers, then stop the balancer.
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	var stressErr error
+	select {
+	case stressErr = <-errCh:
+	case <-done:
+	}
+	close(stop)
+	<-balancerDone
+	if stressErr != nil {
+		t.Fatal(stressErr)
+	}
+
+	// Post-conditions: every ring's window is sane and within budget slack.
+	for i, ring := range rings {
+		entries, ok, earliest, latest := ring.Replay(0)
+		if !ok {
+			t.Fatalf("ring %d: Replay(0) not ok", i)
+		}
+		if latest != numAppends {
+			t.Errorf("ring %d: latest = %d, want %d", i, latest, numAppends)
+		}
+		if len(entries) > 0 {
+			if entries[0].Seq != earliest || entries[len(entries)-1].Seq != latest {
+				t.Errorf("ring %d: entries [%d..%d] disagree with window [%d..%d]",
+					i, entries[0].Seq, entries[len(entries)-1].Seq, earliest, latest)
+			}
+		}
 	}
 }
