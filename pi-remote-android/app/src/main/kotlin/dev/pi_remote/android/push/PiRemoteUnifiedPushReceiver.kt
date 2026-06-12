@@ -7,16 +7,21 @@ import org.unifiedpush.android.connector.MessagingReceiver
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
 
-// Phase-0 skeleton. Real responsibilities (decrypt the crypto_box payload and
-// surface a notification) are implemented in milestones M7-M9.
+// UnifiedPush receive path (SPEC.md §§ 19.2-19.5, issues #33/#34/#35):
+// the distributor (ntfy app) hands us endpoint changes and raw message
+// bytes; we decrypt the crypto_box payload and surface a notification.
 class PiRemoteUnifiedPushReceiver : MessagingReceiver() {
 
     override fun onMessage(context: Context, message: PushMessage, instance: String) {
         Log.i(TAG, "received UnifiedPush message; len=${message.content.size}")
+        val plaintext = PushManager.decrypt(context, message.content) ?: return
+        val payload = PushManager.parsePayload(plaintext) ?: return
+        Notifications.show(context, payload)
     }
 
     override fun onNewEndpoint(context: Context, endpoint: PushEndpoint, instance: String) {
         Log.i(TAG, "new UnifiedPush endpoint: ${endpoint.url}")
+        PushManager.onNewEndpoint(context, endpoint.url)
     }
 
     override fun onRegistrationFailed(
