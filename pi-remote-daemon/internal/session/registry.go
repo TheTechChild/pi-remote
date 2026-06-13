@@ -152,6 +152,13 @@ func safeInvoke(name string, fn func()) {
 // Fires OnRegister exactly once per initially-accepted session;
 // idempotent re-registrations do NOT re-fire.
 func (r *Registry) Register(s *Session) (accepted bool, reason string) {
+	// Grace period for the heartbeat sweep (#42): a fresh registration
+	// has not heartbeated yet; without this stamp the first sweep would
+	// flip brand-new sessions to unresponsive (observed live: a session
+	// went running→unresponsive→running within its first second).
+	if s.LastHeartbeat.IsZero() {
+		s.LastHeartbeat = time.Now()
+	}
 	r.mu.Lock()
 	existing, present := r.sessions[s.SessionID]
 	isNew := !present

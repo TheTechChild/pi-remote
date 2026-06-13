@@ -204,6 +204,37 @@ func (c *Client) runOnce(ctx context.Context) error {
 	c.setConn(conn)
 	defer c.clearConn()
 
+	// Keepalive: proxies in front of the coordinator (Cloudflare's tunnel
+	// edge in particular) drop WebSockets after ~100s of idle, and per
+	// SPEC § 7.8 events emitted during the dead window are lost. Ping
+	// every 30s so a quiet daemon link stays alive; a failed ping closes
+	// the conn so the backoff loop re-dials promptly instead of writing
+	// into a zombie connection.
+	pingCtx, pingCancel := context.WithCancel(ctx)
+	defer pingCancel()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-ticker.C:
+				pctx, pcancel := context.WithTimeout(pingCtx, 10*time.Second)
+				err := conn.Ping(pctx)
+				pcancel()
+				if err != nil {
+					if pingCtx.Err() == nil {
+						c.log.Warn("keepalive ping failed; closing connection",
+							slog.String("err", err.Error()))
+						_ = conn.Close(websocket.StatusAbnormalClosure, "keepalive failed")
+					}
+					return
+				}
+			}
+		}
+	}()
+
 	if err := c.handshake(ctx); err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "handshake failed")
 		return fmt.Errorf("handshake: %w", err)
