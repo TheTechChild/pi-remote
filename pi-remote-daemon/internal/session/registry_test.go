@@ -217,3 +217,20 @@ func TestRegistry_ReapEnded(t *testing.T) {
 		t.Fatal("ended session should be reaped")
 	}
 }
+
+// #42 follow-up: a brand-new registration must get a heartbeat grace
+// period — the sweep should not flip a session that registered moments
+// ago and simply hasn't heartbeated yet.
+func TestRegistry_SweepGivesNewSessionsGracePeriod(t *testing.T) {
+	reg := session.NewRegistry()
+	if !mustRegister(t, reg, newSession("sess-fresh", 1)) {
+		t.Fatal("register failed")
+	}
+	if got := reg.SweepHeartbeats(time.Now(), 30*time.Second); len(got) != 0 {
+		t.Fatalf("sweep flipped a just-registered session: %v", got)
+	}
+	// But it is still swept once genuinely silent past the timeout.
+	if got := reg.SweepHeartbeats(time.Now().Add(31*time.Second), 30*time.Second); len(got) != 1 {
+		t.Fatalf("sweep = %v, want [sess-fresh] after real silence", got)
+	}
+}

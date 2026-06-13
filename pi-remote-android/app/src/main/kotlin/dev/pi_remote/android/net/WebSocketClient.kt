@@ -145,6 +145,10 @@ class WebSocketClient(
             val clientBuilder = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS) // infinite read timeout for WebSocket
+                // Keepalive: Cloudflare's edge drops idle WebSockets
+                // (~100s); pings keep a quiet tunnel connection alive and
+                // detect dead links promptly.
+                .pingInterval(30, TimeUnit.SECONDS)
 
             okHttpClient = clientBuilder.build()
 
