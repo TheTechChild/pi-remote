@@ -7,17 +7,12 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -31,12 +26,8 @@ import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import dev.pi_remote.android.net.WebSocketClient
 import dev.pi_remote.android.sessions.DeepSpaceBackground
-import dev.pi_remote.android.sessions.CardBackground
-import dev.pi_remote.android.sessions.BorderAccent
 import dev.pi_remote.android.sessions.TextPrimary
 import dev.pi_remote.android.sessions.TextSecondary
-import dev.pi_remote.android.sessions.IceBlue
-import dev.pi_remote.android.sessions.MutedGray
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -51,11 +42,6 @@ fun TerminalScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-
-    // Key modifier states
-    var ctrlActive by remember { mutableStateOf(false) }
-    var altActive by remember { mutableStateOf(false) }
-    var fnActive by remember { mutableStateOf(false) }
 
     // Reference to standard Termux TerminalSession
     var termSession by remember { mutableStateOf<TerminalSession?>(null) }
@@ -107,10 +93,6 @@ fun TerminalScreen(
         session.setWriteListener { data, offset, count ->
             val chunk = data.copyOfRange(offset, offset + count)
             webSocketClient.sendPtyInput(sessionId, chunk)
-            // Auto reset key modifiers after a key is pressed (typical Termux behavior)
-            ctrlActive = false
-            altActive = false
-            fnActive = false
         }
 
         // Handle terminal grid size resizes and notify coordinator (M11)
@@ -228,7 +210,10 @@ fun TerminalScreen(
                                         imm?.showSoftInput(this@apply, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
                                     }
                                     override fun shouldBackButtonBeMappedToEscape(): Boolean = true
-                                    override fun shouldEnforceCharBasedInput(): Boolean = false
+                                    // Char-based input gives the most reliable per-character
+                                    // behavior with the Android soft keyboard and disables
+                                    // autocorrect/suggestions/composing underlines.
+                                    override fun shouldEnforceCharBasedInput(): Boolean = true
                                     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
                                     override fun isTerminalViewSelected(): Boolean = true
                                     override fun copyModeChanged(copyMode: Boolean) {}
@@ -239,10 +224,10 @@ fun TerminalScreen(
                                     override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean = false
                                     override fun onLongPress(event: MotionEvent): Boolean = false
 
-                                    override fun readControlKey(): Boolean = ctrlActive
-                                    override fun readAltKey(): Boolean = altActive
+                                    override fun readControlKey(): Boolean = false
+                                    override fun readAltKey(): Boolean = false
                                     override fun readShiftKey(): Boolean = false
-                                    override fun readFnKey(): Boolean = fnActive
+                                    override fun readFnKey(): Boolean = false
 
                                     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean {
                                         return false
@@ -273,125 +258,6 @@ fun TerminalScreen(
                     )
                 }
             }
-
-            // Keyboard Accessory Bar
-            AccessoryKeyboardBar(
-                ctrlActive = ctrlActive,
-                altActive = altActive,
-                fnActive = fnActive,
-                onCtrlToggle = { ctrlActive = !ctrlActive },
-                onAltToggle = { altActive = !altActive },
-                onFnToggle = { fnActive = !fnActive },
-                onSpecialKeyClick = { specialKey ->
-                    termSession?.let { session ->
-                        val bytesToSend = when (specialKey) {
-                            "ESC" -> byteArrayOf(27)
-                            "TAB" -> byteArrayOf(9)
-                            "UP" -> "\u001b[A".toByteArray()
-                            "DOWN" -> "\u001b[B".toByteArray()
-                            "LEFT" -> "\u001b[D".toByteArray()
-                            "RIGHT" -> "\u001b[C".toByteArray()
-                            else -> null
-                        }
-                        bytesToSend?.let { bytes ->
-                            webSocketClient.sendPtyInput(sessionId, bytes)
-                        }
-                    }
-                }
-            )
         }
-    }
-}
-
-@Composable
-fun AccessoryKeyboardBar(
-    ctrlActive: Boolean,
-    altActive: Boolean,
-    fnActive: Boolean,
-    onCtrlToggle: () -> Unit,
-    onAltToggle: () -> Unit,
-    onFnToggle: () -> Unit,
-    onSpecialKeyClick: (String) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(CardBackground)
-            .border(1.dp, BorderAccent)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Modifiers
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ModifierKeyButton(label = "CTRL", active = ctrlActive, onClick = onCtrlToggle)
-            ModifierKeyButton(label = "ALT", active = altActive, onClick = onAltToggle)
-            ModifierKeyButton(label = "FN", active = fnActive, onClick = onFnToggle)
-        }
-
-        // Separator/Spacer
-        Spacer(modifier = Modifier.width(8.dp))
-
-        // Special Actions
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.weight(1f)
-        ) {
-            SpecialActionButton(label = "ESC", onClick = { onSpecialKeyClick("ESC") })
-            SpecialActionButton(label = "TAB", onClick = { onSpecialKeyClick("TAB") })
-        }
-
-        // Arrows Group
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            SpecialActionButton(label = "▲", onClick = { onSpecialKeyClick("UP") })
-            SpecialActionButton(label = "▼", onClick = { onSpecialKeyClick("DOWN") })
-            SpecialActionButton(label = "◀", onClick = { onSpecialKeyClick("LEFT") })
-            SpecialActionButton(label = "▶", onClick = { onSpecialKeyClick("RIGHT") })
-        }
-    }
-}
-
-@Composable
-fun ModifierKeyButton(label: String, active: Boolean, onClick: () -> Unit) {
-    val bg = if (active) IceBlue else Color(0xFF232A46)
-    val text = if (active) DeepSpaceBackground else TextPrimary
-
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(bg)
-            .border(1.dp, BorderAccent, RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = text,
-            fontWeight = FontWeight.Bold,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace
-        )
-    }
-}
-
-@Composable
-fun SpecialActionButton(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF1D223B))
-            .border(1.dp, Color(0xFF2E355E), RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = TextSecondary,
-            fontWeight = FontWeight.Bold,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace
-        )
     }
 }
