@@ -32,3 +32,7 @@ test suite. Run them locally before pushing.
 See [`docs/go-local-dev.md`](docs/go-local-dev.md) for the full
 checklist, why each step matters, and the one-liner to paste before
 `git push`.
+
+## Unraid deployment
+
+Before you do work on the Unraid NAS (SSH, dockerMan templates, container icons, GHCR pulls), read `~/projects/.claude/unraid-server.md`. It is a local file on Clayton's machine and is not in this repo.
